@@ -27,6 +27,10 @@ authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch
 rustc-hex = "1.0"
 clippy = {version = "0.0.175", optional = true}
 
+[build-dependencies]
+util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+
+
 [features]
 default = ["secp256k1", "sha3hash", "rabbitmq"]
 secp256k1 = ["cita-crypto/secp256k1", "libproto/secp256k1", "proof/secp256k1","engine/secp256k1"]
