@@ -76,11 +76,14 @@ fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
     });
 }
 
+include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
+
 fn main() {
     micro_service_init!("cita-bft", "CITA:consensus:cita-bft");
 
     let matches = App::new("cita-bft")
-        .version("0.1")
+        .version(get_build_info_str(true))
+        .long_version(get_build_info_str(false))
         .author("Cryptape")
         .about("CITA Block Chain Node powered by Rust")
         .args_from_usage("-c, --config=[FILE] 'Sets a custom config file'")
