@@ -284,7 +284,7 @@ impl TenderMint {
         if prop.is_none() {
             self.proc_proposal(height, round);
         }
-        info!(
+        debug!(
             "pre_proc_prevote height {},round {} hash {:?} locked_round {:?}",
             height, round, prop, self.lock_round
         );
@@ -308,7 +308,7 @@ impl TenderMint {
     }
 
     fn proc_prevote(&mut self, height: usize, round: usize) -> bool {
-        info!(
+        debug!(
             "proc_prevote begin height {}, round {} vs self {}, round {}",
             height, round, self.height, self.round
         );
@@ -438,7 +438,7 @@ impl TenderMint {
     }
 
     fn proc_precommit(&mut self, height: usize, round: usize) -> bool {
-        info!(
+        debug!(
             "proc_precommit begin {} {} vs self {} {}",
             height, round, self.height, self.round
         );
@@ -544,7 +544,7 @@ impl TenderMint {
 
     fn proc_commit_after(&mut self, height: usize, round: usize) -> bool {
         let now_height = self.height;
-        info!(
+        debug!(
             "proc_commit after self height {},round {} in height {} round {} ",
             now_height, self.round, height, round
         );
@@ -805,7 +805,7 @@ impl TenderMint {
                     process up */
                     if h > self.height || (h == self.height && r >= self.round) {
                         //if h == self.height && r >= self.round {
-                        info!(
+                        debug!(
                             "handle_message get vote: \
                              height {:?}, \
                              round {:?}, \
@@ -884,7 +884,7 @@ impl TenderMint {
                 //proof : self.params vs proposal's block's broof
                 let block_proof = block.get_header().get_proof();
                 let proof = TendermintProof::from(block_proof.clone());
-                info!(" proof is {:?}  {} {}", proof, height, round);
+                debug!(" proof is {:?}  {} {}", proof, height, round);
                 if self.auth_manage.authority_h_old == height - 1 {
                     if !proof.check(height - 1, &self.auth_manage.authorities_old) {
                         return false;
@@ -928,7 +928,7 @@ impl TenderMint {
                 let block = Block::try_from(&proposal.block).unwrap();
                 let block_hash = block.crypt_hash();
                 self.proposal = Some(block_hash);
-                info!(
+                debug!(
                     "save the proposal's hash: height {:?}, round {}, proposal {:?}",
                     self.height,
                     self.round,
@@ -1044,7 +1044,7 @@ impl TenderMint {
                     if wal_flag && height == self.height {
                         self.wal_log.save(LOG_TYPE_PROPOSE, msg).unwrap();
                     }
-                    info!("add proposal height {} round {}!", height, round);
+                    debug!("add proposal height {} round {}!", height, round);
                     let blk = block.try_into().unwrap();
                     let mut lock_round = None;
                     let lock_votes = if proto_proposal.get_islock() {
@@ -1194,7 +1194,7 @@ impl TenderMint {
                 .set_transactions_root(transactions_root.to_vec());
 
             let bh = block.crypt_hash();
-            info!(
+            debug!(
                 "proposal new block: height {:?}, block hash {:?}",
                 self.height, bh
             );
@@ -1428,7 +1428,7 @@ impl TenderMint {
 
                 routing_key!(Auth >> BlockTxs) => {
                     let block_txs = msg.take_block_txs().unwrap();
-                    info!(
+                    debug!(
                         "recive blocktxs height {} self height {}",
                         block_txs.get_height(),
                         self.height
