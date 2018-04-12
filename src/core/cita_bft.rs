@@ -1192,6 +1192,9 @@ impl TenderMint {
             block
                 .mut_header()
                 .set_transactions_root(transactions_root.to_vec());
+            block
+                .mut_header()
+                .set_proposer(self.params.signer.address.to_vec());
 
             let bh = block.crypt_hash();
             debug!(
