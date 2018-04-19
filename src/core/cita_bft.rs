@@ -1552,12 +1552,13 @@ impl TenderMint {
 
         let cost_time = Instant::now() - self.htime;
         let mut tv = self.params.timer.commit;
+        let interval = Duration::from_millis(status.interval);
         if height > status_height
         //|| self.is_round_proposer(status_height+1,INIT_ROUND,&self.params.signer.address).is_ok()
         {
             tv = Duration::new(0, 0);
-        } else if cost_time < self.params.duration {
-            tv = self.params.duration - cost_time;
+        } else if cost_time < interval {
+            tv = interval - cost_time;
         }
 
         self.change_state_step(status_height, r, Step::CommitWait, false);

@@ -20,7 +20,6 @@ use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub duration: u64,
     pub is_test: bool,
     pub signer: PrivKey,
 
@@ -54,7 +53,6 @@ impl Default for TendermintTimer {
 
 pub struct TendermintParams {
     pub timer: TendermintTimer,
-    pub duration: Duration,
     pub is_test: bool,
     pub signer: Signer,
 }
@@ -67,7 +65,6 @@ impl From<Config> for TendermintParams {
     fn from(config: Config) -> Self {
         let dt = TendermintTimer::default();
         TendermintParams {
-            duration: Duration::from_millis(config.duration),
             is_test: config.is_test,
             signer: Signer::from(config.signer),
             timer: TendermintTimer {
