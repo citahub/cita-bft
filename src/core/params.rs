@@ -20,7 +20,6 @@ use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub is_test: bool,
     pub signer: PrivKey,
 
     #[serde(rename = "timeoutPropose")] pub timeout_propose: Option<u64>,
@@ -53,7 +52,6 @@ impl Default for TendermintTimer {
 
 pub struct TendermintParams {
     pub timer: TendermintTimer,
-    pub is_test: bool,
     pub signer: Signer,
 }
 
@@ -65,7 +63,6 @@ impl From<Config> for TendermintParams {
     fn from(config: Config) -> Self {
         let dt = TendermintTimer::default();
         TendermintParams {
-            is_test: config.is_test,
             signer: Signer::from(config.signer),
             timer: TendermintTimer {
                 propose: config.timeout_propose.map_or(dt.propose, to_duration),

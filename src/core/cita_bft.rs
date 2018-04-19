@@ -149,9 +149,6 @@ impl TenderMint {
         params: TendermintParams,
     ) -> TenderMint {
         let proof = TendermintProof::default();
-        if params.is_test {
-            trace!("Run for test!");
-        }
 
         let logpath = DataPath::wal_path();
         TenderMint {
