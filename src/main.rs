@@ -35,6 +35,7 @@ extern crate libproto;
 extern crate log;
 extern crate logger;
 extern crate lru_cache;
+extern crate ntp;
 extern crate proof;
 extern crate protobuf;
 extern crate pubsub;
@@ -42,6 +43,7 @@ extern crate rustc_hex;
 #[macro_use]
 extern crate serde_derive;
 extern crate threadpool;
+extern crate time;
 #[macro_use]
 extern crate util;
 
@@ -51,11 +53,14 @@ use std::thread;
 
 mod core;
 use core::cita_bft::TenderMint;
+use core::ntp::Ntp;
 use core::params::TendermintParams;
 use core::votetime::WaitTimer;
 use cpuprofiler::PROFILER;
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
+use std::thread::sleep;
+use std::time::Duration;
 use util::set_panic_handler;
 
 const THREAD_POOL_NUM: usize = 10;
@@ -87,6 +92,7 @@ fn main() {
         .author("Cryptape")
         .about("CITA Block Chain Node powered by Rust")
         .args_from_usage("-c, --config=[FILE] 'Sets a custom config file'")
+        .args_from_usage("-n, --ntp=[FILE] 'Sets a ntp config file'")
         .args_from_usage("--prof-start=[0] 'Specify the start time of profiling, zero means no profiling'")
         .args_from_usage("--prof-duration=[0] 'Specify the duration for profiling, zero means no profiling'")
         .get_matches();
@@ -95,6 +101,12 @@ fn main() {
     if let Some(c) = matches.value_of("config") {
         trace!("Value for config: {}", c);
         config_path = c;
+    }
+
+    let mut ntp_path = "ntp";
+    if let Some(ntp) = matches.value_of("ntp") {
+        trace!("Value for ntp: {}", ntp);
+        ntp_path = ntp;
     }
 
     let flag_prof_start = matches
@@ -151,6 +163,33 @@ fn main() {
         let mut engine = TenderMint::new(tx_pub, main4mq, main2timer, main4timer, params);
         engine.start();
     });
+
+    // NTP service
+    let ntp_config = Ntp::new(ntp_path);
+    // Default
+    // let ntp_config = Ntp {
+    //     enabled: true,
+    //     threshold: 3000,
+    //     address: String::from("0.pool.ntp.org:123"),
+    // };
+    let mut log_tag: u8 = 0;
+
+    if ntp_config.switch == true {
+        thread::spawn(move || loop {
+            if ntp_config.clock_offset_overflow() {
+                warn!("System clock seems off!!!");
+                log_tag += 1;
+                if log_tag == 10 {
+                    log_tag = 0;
+                    sleep(Duration::new(1000, 0));
+                }
+            } else {
+                log_tag = 0;
+            }
+
+            sleep(Duration::new(10, 0));
+        });
+    }
 
     mainthd.join().unwrap();
     timethd.join().unwrap();

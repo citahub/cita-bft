@@ -20,6 +20,7 @@ pub mod votetime;
 pub mod cita_bft;
 pub mod params;
 pub mod voteset;
+pub mod ntp;
 
 pub use self::cita_bft::*;
 pub use self::params::*;

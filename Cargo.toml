@@ -26,6 +26,7 @@ cpuprofiler = "0.0.3"
 authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 rustc-hex = "1.0"
 clippy = {version = "0.0.175", optional = true}
+ntp = "0.4.0"
 
 [build-dependencies]
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
