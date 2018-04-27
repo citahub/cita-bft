@@ -174,7 +174,7 @@ fn main() {
     // };
     let mut log_tag: u8 = 0;
 
-    if ntp_config.switch == true {
+    if ntp_config.enabled {
         thread::spawn(move || loop {
             if ntp_config.clock_offset_overflow() {
                 warn!("System clock seems off!!!");
