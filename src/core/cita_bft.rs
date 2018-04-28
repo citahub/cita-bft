@@ -941,7 +941,7 @@ impl TenderMint {
     fn verify_req(&mut self, block: &Block, vheight: usize, vround: usize) -> bool {
         let transactions = block.get_body().get_transactions();
         let len = transactions.len();
-        let verify_ok = transactions.into_iter().all(|tx| {
+        let verify_ok = block.check_hash() && transactions.into_iter().all(|tx| {
             let result = verify_tx(tx.get_transaction(), vheight as u64);
             if !result {
                 let raw_tx = tx.get_transaction();
