@@ -96,7 +96,7 @@ const THREAD_POOL_NUM: usize = 10;
 
 fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
     //start profiling
-    if flag_prof_start != 0 && flag_prof_duration != 0 {
+    if flag_prof_duration != 0 {
         let start = flag_prof_start;
         let duration = flag_prof_duration;
         thread::spawn(move || {
@@ -151,7 +151,6 @@ fn main() {
         .parse::<u64>()
         .unwrap();
 
-    profiler(flag_prof_start, flag_prof_duration);
     // timer module
     let (main2timer, timer4main) = channel();
     let (timer2main, main4timer) = channel();
@@ -221,6 +220,8 @@ fn main() {
             sleep(Duration::new(10, 0));
         });
     }
+
+    profiler(flag_prof_start, flag_prof_duration);
 
     mainthd.join().unwrap();
     timethd.join().unwrap();
