@@ -15,6 +15,35 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+//! ## Summary
+//!
+//! One of CITA's core components, implementation of variants of Tendermint consensus algorithm.
+//! The entire process is driven by timeout mechanisms and voting.
+//!
+//! ### Message queuing situation
+//!
+//! 1. Subscribe channel
+//!
+//!     | Queue     | SubModule | Message Type    |
+//!     | --------- | --------- | --------------- |
+//!     | consensus | Net       | SignedProposal  |
+//!     | consensus | Net       | RawBytes        |
+//!     | consensus | Chain     | RichStatus      |
+//!     | consensus | Auth      | BlockTxs        |
+//!     | consensus | Auth      | VerifyBlockResp |
+//!     | consensus | Snapshot  | SnapshotReq     |
+//!
+//! 2. Publish channel
+//!
+//!     | Queue     | SubModule | Message Type    |
+//!     | --------- | --------- | --------------- |
+//!     | consensus | Consensus | VerifyBlockReq  |
+//!     | consensus | Consensus | RawBytes        |
+//!     | consensus | Consensus | BlockWithProof  |
+//!     | consensus | Consensus | SignedProposal  |
+//!     | consensus | Consensus | SnapshotResp    |
+//!
+
 #![cfg_attr(feature = "clippy", feature(plugin))]
 #![cfg_attr(feature = "clippy", plugin(clippy))]
 #![feature(custom_attribute)]
@@ -67,18 +96,20 @@ const THREAD_POOL_NUM: usize = 10;
 
 fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
     //start profiling
-    let start = flag_prof_start;
-    let duration = flag_prof_duration;
-    thread::spawn(move || {
-        thread::sleep(std::time::Duration::new(start, 0));
-        PROFILER
-            .lock()
-            .unwrap()
-            .start("./tdmint.profiler")
-            .expect("Couldn't start");
-        thread::sleep(std::time::Duration::new(duration, 0));
-        PROFILER.lock().unwrap().stop().unwrap();
-    });
+    if flag_prof_start != 0 && flag_prof_duration != 0 {
+        let start = flag_prof_start;
+        let duration = flag_prof_duration;
+        thread::spawn(move || {
+            thread::sleep(std::time::Duration::new(start, 0));
+            PROFILER
+                .lock()
+                .unwrap()
+                .start("./tdmint.profiler")
+                .expect("Couldn't start");
+            thread::sleep(std::time::Duration::new(duration, 0));
+            PROFILER.lock().unwrap().stop().unwrap();
+        });
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
