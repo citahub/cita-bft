@@ -646,8 +646,8 @@ impl TenderMint {
                     proof_blk.set_blk(blk.unwrap());
                     proof_blk.set_proof(proof.into());
 
-                    // statement with no effect, bug here?
-                    // self.block_proof == Some((height, proof_blk.clone()));
+                    // saved for retranse blockwithproof to chain
+                    self.block_proof == Some((height, proof_blk.clone()));
                     info!(
                         "commit block height {} with round {} consensus time {:?} ",
                         height,
