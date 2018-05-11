@@ -38,7 +38,7 @@
 //!     | Queue     | PubModule | SubModule       | Message Type    |
 //!     | --------- | --------- | --------------- | --------------- |
 //!     | consensus | Consensus | Auth            | VerifyBlockReq  |
-//!     | consensus | Consensus | Net, Executor   | RawBytes        |
+//!     | consensus | Consensus | Net             | RawBytes        |
 //!     | consensus | Consensus | Chain, Executor | BlockWithProof  |
 //!     | consensus | Consensus | Net, Executor   | SignedProposal  |
 //!     | consensus | Consensus | Snapshot        | SnapshotResp    |
