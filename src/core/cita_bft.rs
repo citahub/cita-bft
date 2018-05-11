@@ -194,7 +194,7 @@ impl TenderMint {
         //let ref p = self.params;
         let p = &self.auth_manage;
         if p.authority_n == 0 {
-            info!("authority_n is {}", p.authority_n);
+            warn!("There are no authorities");
             return Err(EngineError::NotAuthorized(Address::zero()));
         }
         let proposer_nonce = height + round;
@@ -289,9 +289,10 @@ impl TenderMint {
             //let hash = H256::from(self.locked_block.clone().unwrap().crypt_hash());
             self.pub_and_broadcast_message(height, round, Step::Prevote, prop);
         } else {
-            info!(
+            trace!(
                 "pre_proc_prevote not have any thing in {} {}",
-                height, round
+                height,
+                round
             );
             self.pub_and_broadcast_message(height, round, Step::Prevote, Some(H256::default()));
         }
@@ -330,7 +331,7 @@ impl TenderMint {
                         //we have lock block,and now polc  then unlock
                         if self.lock_round.is_some() && self.lock_round.unwrap() < round && round <= self.round {
                             //we see new lock block unlock mine
-                            info!("unlock lock block height {:?}, hash {:?}", height, hash);
+                            trace!("unlock lock block height {:?}, hash {:?}", height, hash);
                             self.lock_round = None;
                             self.locked_vote = None;
                         }
@@ -479,7 +480,7 @@ impl TenderMint {
                         //self.proposal = None;
                         } else if self.proposal.is_some() {
                             if hash != self.proposal.unwrap() {
-                                info!(
+                                trace!(
                                     "proc_precommit why this hanppen self.proposql {:?} hash {:?}",
                                     self.proposal.unwrap(),
                                     hash
@@ -569,9 +570,11 @@ impl TenderMint {
                 if self.proof.height == now_height {
                     self.save_wal_proof();
                 } else {
-                    info!(
+                    trace!(
                         "try my best to save proof not ok,at height {} round {} now height {}",
-                        now_height, round, self.height
+                        now_height,
+                        round,
+                        self.height
                     );
                 }
             }
@@ -643,11 +646,12 @@ impl TenderMint {
                     proof_blk.set_blk(blk.unwrap());
                     proof_blk.set_proof(proof.into());
 
-                    // statement with no effect, bug here?
-                    // self.block_proof == Some((height, proof_blk.clone()));
+                    // saved for retranse blockwithproof to chain
+                    self.block_proof == Some((height, proof_blk.clone()));
                     info!(
-                        " ######### height {} consensus time {:?} ",
+                        "commit block height {} with round {} consensus time {:?} ",
                         height,
+                        round,
                         Instant::now() - self.htime
                     );
                     self.pub_block(&proof_blk);
@@ -904,9 +908,10 @@ impl TenderMint {
                 && proposal_lock_round.unwrap() < round
             {
                 //we see new lock block unlock mine
-                info!(
+                trace!(
                     "unlock lock block: height {:?}, proposal {:?}",
-                    height, self.proposal
+                    height,
+                    self.proposal
                 );
                 self.clean_saved_info();
             }
@@ -914,7 +919,7 @@ impl TenderMint {
             if self.lock_round.is_some() {
                 let lock_block = &self.locked_block.clone().unwrap();
                 self.proposal = Some(lock_block.crypt_hash());
-                info!(
+                trace!(
                     "still have lock block {} locked round {} {:?}",
                     self.height,
                     self.lock_round.unwrap(),
@@ -945,7 +950,7 @@ impl TenderMint {
             let result = verify_tx(tx.get_transaction(), vheight as u64);
             if !result {
                 let raw_tx = tx.get_transaction();
-                info!(
+                warn!(
                     "verify tx in proposal failed, tx nonce: {}, tx valid_until_block: {}, proposal height: {}",
                     raw_tx.get_nonce(),
                     raw_tx.get_valid_until_block(),
@@ -1011,9 +1016,11 @@ impl TenderMint {
                 if height < self.height || (height == self.height && round < self.round)
                     || (height == self.height && round == self.round && self.step > Step::ProposeWait)
                 {
-                    info!(
+                    trace!(
                         "handle proposal get old proposal now height {} round {} step {:?}",
-                        self.height, self.round, self.step
+                        self.height,
+                        self.round,
+                        self.step
                     );
                     return Err(EngineError::VoteMsgDelay(height));
                 }
@@ -1113,8 +1120,8 @@ impl TenderMint {
             {
                 let lock_blk_hash = lock_blk.crypt_hash();
                 info!(
-                    "proposal lock block: height {:?}, block hash {:?}",
-                    self.height, lock_blk_hash
+                    "proposal lock block: height {:?}, round {:?} block hash {:?}",
+                    self.height, self.round, lock_blk_hash
                 );
                 self.proposal = Some(lock_blk_hash);
             }
@@ -1158,9 +1165,10 @@ impl TenderMint {
                     .mut_header()
                     .set_prevhash(self.pre_hash.unwrap().0.to_vec());
             } else {
-                info!(
+                trace!(
                     "in new_proposal,self.pre_hash is none: height {}, round {}",
-                    self.height, self.round
+                    self.height,
+                    self.round
                 );
                 //block.mut_header().set_prevhash(H256::default().0.to_vec());
             }
@@ -1175,8 +1183,8 @@ impl TenderMint {
             }
             if self.height > INIT_HEIGHT && proof.height != self.height - 1 {
                 warn!(
-                    "proof is old,proof height {}, round {}",
-                    proof.height, proof.round
+                    "proof is old,proof height {}, bft height {}",
+                    proof.height, self.height
                 );
                 return;
             }
@@ -1194,9 +1202,9 @@ impl TenderMint {
                 .set_proposer(self.params.signer.address.to_vec());
 
             let bh = block.crypt_hash();
-            debug!(
-                "proposal new block: height {:?}, block hash {:?}",
-                self.height, bh
+            info!(
+                "proposal new block: height {:?}, round {:?}, block hash {:?}",
+                self.height, self.round, bh
             );
             {
                 self.proposal = Some(bh);
@@ -1254,7 +1262,7 @@ impl TenderMint {
         } else if tminfo.step == Step::Prevote {
             self.pre_proc_prevote();
         } else if tminfo.step == Step::PrevoteWait {
-            info!(
+            trace!(
                 " #########  height {} round {} prevote wait time {:?} ",
                 tminfo.height,
                 tminfo.round,
@@ -1290,7 +1298,7 @@ impl TenderMint {
             self.pre_proc_prevote();
             self.pre_proc_precommit();
         } else if tminfo.step == Step::PrecommitWait {
-            info!(
+            trace!(
                 " ######### height {} round {} PrecommitWait time {:?} ",
                 tminfo.height,
                 tminfo.round,
@@ -1563,7 +1571,7 @@ impl TenderMint {
 
         self.change_state_step(status_height, r, Step::CommitWait, false);
         info!(
-            " ######### height {} round {} chain status return time {:?} ",
+            "get new chain status height {} round {} cost time {:?} ",
             status_height, self.round, cost_time
         );
         self.timer_seter.send(TimeoutInfo {

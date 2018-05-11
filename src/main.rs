@@ -188,7 +188,6 @@ fn main() {
 
     // main cita-bft loop module
     let params = TendermintParams::new(config_path);
-    info!("main loop start **** ");
     let mainthd = thread::spawn(move || {
         let mut engine = TenderMint::new(tx_pub, main4mq, main2timer, main4timer, params);
         engine.start();
