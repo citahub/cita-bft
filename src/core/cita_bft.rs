@@ -1428,7 +1428,9 @@ impl TenderMint {
                             }
                         } else {
                             self.clean_saved_info();
+                            self.pub_and_broadcast_message(vheight, vround, Step::Prevote, Some(H256::default()));
                             self.pub_and_broadcast_message(vheight, vround, Step::Precommit, Some(H256::default()));
+                            self.change_state_step(vheight, vround, Step::Precommit, false);
                             self.proc_precommit(vheight, vround);
                         }
                     }
