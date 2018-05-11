@@ -24,7 +24,7 @@
 //!
 //! 1. Subscribe channel
 //!
-//!     | Queue     | SubModule | Message Type    |
+//!     | Queue     | PubModule | Message Type    |
 //!     | --------- | --------- | --------------- |
 //!     | consensus | Net       | SignedProposal  |
 //!     | consensus | Net       | RawBytes        |
@@ -35,13 +35,13 @@
 //!
 //! 2. Publish channel
 //!
-//!     | Queue     | SubModule | Message Type    |
-//!     | --------- | --------- | --------------- |
-//!     | consensus | Consensus | VerifyBlockReq  |
-//!     | consensus | Consensus | RawBytes        |
-//!     | consensus | Consensus | BlockWithProof  |
-//!     | consensus | Consensus | SignedProposal  |
-//!     | consensus | Consensus | SnapshotResp    |
+//!     | Queue     | PubModule | SubModule       | Message Type    |
+//!     | --------- | --------- | --------------- | --------------- |
+//!     | consensus | Consensus | Auth            | VerifyBlockReq  |
+//!     | consensus | Consensus | Net, Executor   | RawBytes        |
+//!     | consensus | Consensus | Chain, Executor | BlockWithProof  |
+//!     | consensus | Consensus | Net, Executor   | SignedProposal  |
+//!     | consensus | Consensus | Snapshot        | SnapshotResp    |
 //!
 
 #![cfg_attr(feature = "clippy", feature(plugin))]
