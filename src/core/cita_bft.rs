@@ -40,7 +40,8 @@ use std::fs;
 use std::sync::mpsc::{Receiver, RecvError, Sender};
 use std::time::{Duration, Instant};
 
-use util::{Address, H256, Hashable};
+use types::{Address, H256};
+use util::Hashable;
 use util::datapath::DataPath;
 
 const INIT_HEIGHT: usize = 1;

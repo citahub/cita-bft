@@ -54,6 +54,7 @@
 extern crate authority_manage;
 extern crate bincode;
 extern crate cita_crypto as crypto;
+extern crate cita_types as types;
 extern crate clap;
 extern crate cpuprofiler;
 extern crate dotenv;

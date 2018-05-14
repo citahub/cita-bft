@@ -15,14 +15,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use super::{Address, Step};
+use super::Step;
 use bincode::{serialize, Infinite};
 use crypto::{pubkey_to_address, Sign, Signature};
 use libproto::blockchain::{Block, Transaction};
 use lru_cache::LruCache;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use util::{H256, Hashable, BLOCKLIMIT};
+use types::{Address, H256};
+use util::{Hashable, BLOCKLIMIT};
 
 // height -> round collector
 #[derive(Debug)]
