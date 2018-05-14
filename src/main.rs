@@ -117,6 +117,7 @@ include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
 fn main() {
     micro_service_init!("cita-bft", "CITA:consensus:cita-bft");
+    info!("Version: {}", get_build_info_str(true));
 
     let matches = App::new("cita-bft")
         .version(get_build_info_str(true))
