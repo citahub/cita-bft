@@ -11,7 +11,7 @@ jobs:
   include:
     - stage: Build
       script:
-        - docker pull cita/cita-build:latest
+        - docker pull cita/cita-build:ubuntu18
         - bash '.ci-scripts/format'
         - bash '.ci-scripts/build'
 before_cache:
