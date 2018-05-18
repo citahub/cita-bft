@@ -15,12 +15,17 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use super::ntp::Ntp;
 use crypto::{PrivKey, Signer};
+use std::fs::File;
+use std::io::Read;
+use std::str::FromStr;
 use std::time::Duration;
+use types::clean_0x;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    pub signer: PrivKey,
+    pub ntp_config: Ntp,
 
     #[serde(rename = "timeoutPropose")]
     pub timeout_propose: Option<u64>,
@@ -33,6 +38,30 @@ pub struct Config {
     // Commit step timeout in milliseconds.
     #[serde(rename = "timeoutCommit")]
     pub timeout_commit: Option<u64>,
+}
+
+impl Config {
+    pub fn new(path: &str) -> Self {
+        parse_config!(Config, path)
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PrivateKey {
+    signer: PrivKey,
+}
+
+impl PrivateKey {
+    pub fn new(path: &str) -> Self {
+        let mut buffer = String::new();
+        File::open(path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .unwrap_or_else(|err| panic!("Error while loading PrivateKey: [{}]", err));
+
+        let signer = PrivKey::from_str(clean_0x(&buffer)).unwrap();
+
+        PrivateKey { signer: signer }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -63,11 +92,11 @@ fn to_duration(s: u64) -> Duration {
     Duration::from_millis(s)
 }
 
-impl From<Config> for TendermintParams {
-    fn from(config: Config) -> Self {
+impl TendermintParams {
+    pub fn new(config: &Config, priv_key: &PrivateKey) -> Self {
         let dt = TendermintTimer::default();
         TendermintParams {
-            signer: Signer::from(config.signer),
+            signer: Signer::from(priv_key.signer),
             timer: TendermintTimer {
                 propose: config.timeout_propose.map_or(dt.propose, to_duration),
                 prevote: config.timeout_prevote.map_or(dt.prevote, to_duration),
@@ -75,12 +104,5 @@ impl From<Config> for TendermintParams {
                 commit: config.timeout_commit.map_or(dt.commit, to_duration),
             },
         }
-    }
-}
-
-impl TendermintParams {
-    pub fn new(path: &str) -> Self {
-        let config = parse_config!(Config, path);
-        config.into()
     }
 }
