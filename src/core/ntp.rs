@@ -47,7 +47,7 @@ use ntp::request;
 use time::{Duration, Timespec};
 use time::now_utc;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Ntp {
     pub enabled: bool,
     pub threshold: i64,
@@ -56,6 +56,7 @@ pub struct Ntp {
 
 impl Ntp {
     /// New a config form the path
+    #[cfg(test)]
     pub fn new(path: &str) -> Self {
         let config = parse_config!(Ntp, path);
         config.into()
