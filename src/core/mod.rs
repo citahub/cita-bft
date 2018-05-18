@@ -15,12 +15,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-pub mod wal;
-pub mod votetime;
 pub mod cita_bft;
+pub mod ntp;
 pub mod params;
 pub mod voteset;
-pub mod ntp;
+pub mod votetime;
+pub mod wal;
 
 pub use self::cita_bft::*;
 pub use self::params::*;

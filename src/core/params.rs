@@ -22,13 +22,17 @@ use std::time::Duration;
 pub struct Config {
     pub signer: PrivKey,
 
-    #[serde(rename = "timeoutPropose")] pub timeout_propose: Option<u64>,
+    #[serde(rename = "timeoutPropose")]
+    pub timeout_propose: Option<u64>,
     // Prevote step timeout in milliseconds.
-    #[serde(rename = "timeoutPrevote")] pub timeout_prevote: Option<u64>,
+    #[serde(rename = "timeoutPrevote")]
+    pub timeout_prevote: Option<u64>,
     // Precommit step timeout in milliseconds.
-    #[serde(rename = "timeoutPrecommit")] pub timeout_precommit: Option<u64>,
+    #[serde(rename = "timeoutPrecommit")]
+    pub timeout_precommit: Option<u64>,
     // Commit step timeout in milliseconds.
-    #[serde(rename = "timeoutCommit")] pub timeout_commit: Option<u64>,
+    #[serde(rename = "timeoutCommit")]
+    pub timeout_commit: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
