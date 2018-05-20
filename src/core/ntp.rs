@@ -55,13 +55,6 @@ pub struct Ntp {
 }
 
 impl Ntp {
-    /// New a config form the path
-    #[cfg(test)]
-    pub fn new(path: &str) -> Self {
-        let config = parse_config!(Ntp, path);
-        config.into()
-    }
-
     /// Check the system clock offset overflow the threshold
     pub fn clock_offset_overflow(&self) -> bool {
         let mut offset_overflow = false;
