@@ -124,7 +124,7 @@ fn main() {
         .author("Cryptape")
         .about("CITA Block Chain Node powered by Rust")
         .args_from_usage("-c, --config=[FILE] 'Sets a custom config file'")
-        .args_from_usage("-n, --ntp=[FILE] 'Sets a ntp config file'")
+        .args_from_usage("-p, --private=[FILE] 'Sets a private key file'")
         .args_from_usage(
             "--prof-start=[0] 'Specify the start time of profiling, zero means no profiling'",
         )
