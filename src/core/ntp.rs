@@ -44,8 +44,8 @@
 
 use ntp::errors::Error;
 use ntp::request;
-use time::{Duration, Timespec};
 use time::now_utc;
+use time::{Duration, Timespec};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Ntp {
