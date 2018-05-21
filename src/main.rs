@@ -125,8 +125,12 @@ fn main() {
         .about("CITA Block Chain Node powered by Rust")
         .args_from_usage("-c, --config=[FILE] 'Sets a custom config file'")
         .args_from_usage("-p, --private=[FILE] 'Sets a private key file'")
-        .args_from_usage("--prof-start=[0] 'Specify the start time of profiling, zero means no profiling'")
-        .args_from_usage("--prof-duration=[0] 'Specify the duration for profiling, zero means no profiling'")
+        .args_from_usage(
+            "--prof-start=[0] 'Specify the start time of profiling, zero means no profiling'",
+        )
+        .args_from_usage(
+            "--prof-duration=[0] 'Specify the duration for profiling, zero means no profiling'",
+        )
         .get_matches();
 
     let mut config_path = "consensus.toml";
