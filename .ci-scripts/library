@@ -1,7 +1,7 @@
 #!/bin/echo Warning: this file should be sourced!
 
-DOCKER_IMAGE="cita/cita-build:ubuntu-18.04-20180518"
-DOCKER_CARGO_HOME="/root/.cargo"
+DOCKER_IMAGE="cita/cita-build:ubuntu-18.04-20180523"
+DOCKER_HOME="/opt"
 
 SRCDIR=$(readlink -f $(dirname ${SCRIPT_PATH})/..)
 cd ${SRCDIR}
@@ -11,8 +11,9 @@ WORKDIR=/data/work
 function run_in_docker () {
     docker run --rm \
         --volume "${SRCDIR}:${WORKDIR}" \
-        --volume "rust-git:${DOCKER_CARGO_HOME}/git" \
-        --volume "rust-registry:${DOCKER_CARGO_HOME}/registry" \
+        --volume "rust-git:${DOCKER_HOME}/.cargo/git" \
+        --volume "rust-registry:${DOCKER_HOME}/.cargo/registry" \
+        --env USER_ID=`id -u $USER` \
         --workdir "${WORKDIR}" \
         "${DOCKER_IMAGE}" \
         "$@"
