@@ -5,7 +5,6 @@ cache:
   directories:
   - $HOME/.cargo/git
   - $HOME/.cargo/registry
-  - $TRAVIS_BUILD_DIR/target
 services:
   - docker
 jobs:
