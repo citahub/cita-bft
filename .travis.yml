@@ -3,17 +3,14 @@ sudo: required
 cache:
   timeout: 600
   directories:
-  - $HOME/.cargo
-  - $TRAVIS_BUILD_DIR/target
+  - $HOME/.cargo/git
+  - $HOME/.cargo/registry
 services:
   - docker
 jobs:
   include:
     - stage: Build
       script:
-        - docker pull cita/cita-build:ubuntu-18.04-20180518
+        - docker pull cita/cita-build:ubuntu-18.04-20180523
         - bash '.ci-scripts/format'
         - bash '.ci-scripts/build'
-before_cache:
-    - sudo chown -R travis:travis $HOME/.cargo
-    - sudo chown -R travis:travis $TRAVIS_BUILD_DIR/target
