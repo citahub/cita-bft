@@ -55,7 +55,9 @@ impl PrivateKey {
 
 #[derive(Debug, Clone)]
 pub struct TendermintTimer {
+    // in milliseconds.
     total_duration: Cell<u64>,
+    // fraction: (numerator, denominator)
     propose: (u64, u64),
     prevote: (u64, u64),
     precommit: (u64, u64),
@@ -65,9 +67,7 @@ pub struct TendermintTimer {
 impl Default for TendermintTimer {
     fn default() -> Self {
         TendermintTimer {
-            // in milliseconds.
             total_duration: Cell::new(3000),
-            // fraction: (numerator, denominator)
             propose: (24, 30),
             prevote: (1, 30),
             precommit: (1, 30),
