@@ -198,7 +198,7 @@ fn main() {
     info!("CITA:bft signer \n {:?}", pk);
 
     // main cita-bft loop module
-    let params = TendermintParams::new(&config, &pk);
+    let params = TendermintParams::new( &pk);
     let mainthd = thread::spawn(move || {
         let mut engine = TenderMint::new(tx_pub, main4mq, main2timer, main4timer, params);
         engine.start();

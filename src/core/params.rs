@@ -17,6 +17,7 @@
 
 use super::ntp::Ntp;
 use crypto::{PrivKey, Signer};
+use std::cell::Cell;
 use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
@@ -26,8 +27,6 @@ use types::clean_0x;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub ntp_config: Ntp,
-    // cycle = propose + prevote + precommit + commit, in milliseconds.
-    cycle: u64,
 }
 
 impl Config {
@@ -56,10 +55,49 @@ impl PrivateKey {
 
 #[derive(Debug, Clone)]
 pub struct TendermintTimer {
-    pub propose: Duration,
-    pub prevote: Duration,
-    pub precommit: Duration,
-    pub commit: Duration,
+    total_duration: Cell<u64>,
+    total_quota: u64,
+    propose: u64,
+    prevote: u64,
+    precommit: u64,
+    commit: u64,
+}
+
+impl Default for TendermintTimer {
+    fn default() -> Self {
+        TendermintTimer {
+            // in milliseconds.
+            total_duration: Cell::new(3000),
+            //total_quota = propose + prevote + precommit + commit.
+            total_quota: 30,
+            propose: 24,
+            prevote: 1,
+            precommit: 1,
+            commit: 4,
+        }
+    }
+}
+
+impl TendermintTimer {
+    pub fn set_total_duration(&self, duration: u64) {
+        self.total_duration.set(duration);
+    }
+
+    pub fn get_propose(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.propose / self.total_quota)
+    }
+
+    pub fn get_prevote(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.prevote / self.total_quota)
+    }
+
+    pub fn get_precommit(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.precommit / self.total_quota)
+    }
+
+    pub fn get_commit(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.commit / self.total_quota)
+    }
 }
 
 pub struct TendermintParams {
@@ -68,15 +106,10 @@ pub struct TendermintParams {
 }
 
 impl TendermintParams {
-    pub fn new(config: &Config, priv_key: &PrivateKey) -> Self {
+    pub fn new(priv_key: &PrivateKey) -> Self {
         TendermintParams {
             signer: Signer::from(priv_key.signer),
-            timer: TendermintTimer {
-                propose: Duration::from_millis(config.cycle * 24 / 30),
-                prevote: Duration::from_millis(config.cycle * 1 / 30),
-                precommit: Duration::from_millis(config.cycle * 1 / 30),
-                commit: Duration::from_millis(config.cycle * 4 / 30),
-            },
+            timer: TendermintTimer::default(),
         }
     }
 }

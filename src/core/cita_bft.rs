@@ -304,7 +304,7 @@ impl TenderMint {
         }
         //this is for timeout resending votes
         self.timer_seter.send(TimeoutInfo {
-            timeval: self.params.timer.prevote * TIMEOUT_RETRANSE_MULTIPLE,
+            timeval: self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE,
             height: height,
             round: round,
             step: Step::Prevote,
@@ -330,7 +330,7 @@ impl TenderMint {
                 let mut tv = if self.is_all_vote(&vote_set.count) {
                     Duration::new(0, 0)
                 } else {
-                    self.params.timer.prevote
+                    self.params.timer.get_prevote()
                 };
 
                 for (hash, count) in &vote_set.votes_by_proposal {
@@ -433,7 +433,7 @@ impl TenderMint {
 
         //timeout for resending vote msg
         self.timer_seter.send(TimeoutInfo {
-            timeval: self.params.timer.precommit * TIMEOUT_RETRANSE_MULTIPLE,
+            timeval: self.params.timer.get_precommit() * TIMEOUT_RETRANSE_MULTIPLE,
             height: self.height,
             round: self.round,
             step: Step::Precommit,
@@ -475,7 +475,7 @@ impl TenderMint {
                 let mut tv = if self.is_all_vote(&vote_set.count) {
                     Duration::new(0, 0)
                 } else {
-                    self.params.timer.precommit
+                    self.params.timer.get_precommit()
                 };
 
                 for (hash, count) in vote_set.votes_by_proposal {
@@ -813,7 +813,7 @@ impl TenderMint {
                                 }
                             } else if fround == r && step == fstep
                                 && now - ins
-                                    > self.params.timer.prevote * TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE
+                                    > self.params.timer.get_prevote() * TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE
                             {
                                 add_flag = true;
                                 trans_flag = true;
@@ -1312,7 +1312,7 @@ impl TenderMint {
             } else {
                 self.change_state_step(tminfo.height, tminfo.round, Step::PrecommitAuth, false);
                 self.timer_seter.send(TimeoutInfo {
-                    timeval: self.params.timer.prevote * TIMEOUT_RETRANSE_MULTIPLE,
+                    timeval: self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE,
                     height: tminfo.height,
                     round: tminfo.round,
                     step: Step::PrecommitAuth,
@@ -1565,6 +1565,8 @@ impl TenderMint {
 
     fn receive_new_status(&mut self, status: &RichStatus) {
         let status_height = status.height as usize;
+        self.params.timer.set_total_duration(status.interval);
+
         let height = self.height;
         let round = self.round;
         let step = self.step;
@@ -1611,7 +1613,7 @@ impl TenderMint {
         }
 
         let cost_time = Instant::now() - self.htime;
-        let mut tv = self.params.timer.commit;
+        let mut tv = self.params.timer.get_commit();
         let interval = Duration::from_millis(status.interval);
         if height > status_height
         //|| self.is_round_proposer(status_height+1,INIT_ROUND,&self.params.signer.address).is_ok()
@@ -1635,7 +1637,7 @@ impl TenderMint {
     }
 
     fn new_round_start(&mut self, height: usize, round: usize) {
-        let mut tv = self.params.timer.propose * ((round + 1) as u32);
+        let mut tv = self.params.timer.get_propose() * ((round + 1) as u32);
         if self.proposals.get_proposal(height, round).is_some() {
             tv = Duration::new(0, 0);
         } else if self
@@ -1668,7 +1670,7 @@ impl TenderMint {
 
             if self.step == Step::PrevoteWait {
                 self.timer_seter.send(TimeoutInfo {
-                    timeval: self.params.timer.prevote,
+                    timeval: self.params.timer.get_prevote(),
                     height: height,
                     round: round,
                     step: Step::PrevoteWait,
@@ -1679,7 +1681,7 @@ impl TenderMint {
             self.proc_precommit(height, round);
             if self.step == Step::PrecommitWait {
                 self.timer_seter.send(TimeoutInfo {
-                    timeval: self.params.timer.precommit,
+                    timeval: self.params.timer.get_precommit(),
                     height: height,
                     round: round,
                     step: Step::PrecommitWait,
@@ -1700,7 +1702,7 @@ impl TenderMint {
         } else if self.step == Step::CommitWait {
             /*self.timer_seter.send(
                     TimeoutInfo{
-                        timeval:self.params.timer.commit,
+                        timeval:self.params.timer.get_commit(),
                         height:height,
                         round:round,
                         step:Step::CommitWait});*/
