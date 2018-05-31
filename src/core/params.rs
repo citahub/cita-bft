@@ -26,18 +26,8 @@ use types::clean_0x;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub ntp_config: Ntp,
-
-    #[serde(rename = "timeoutPropose")]
-    pub timeout_propose: Option<u64>,
-    // Prevote step timeout in milliseconds.
-    #[serde(rename = "timeoutPrevote")]
-    pub timeout_prevote: Option<u64>,
-    // Precommit step timeout in milliseconds.
-    #[serde(rename = "timeoutPrecommit")]
-    pub timeout_precommit: Option<u64>,
-    // Commit step timeout in milliseconds.
-    #[serde(rename = "timeoutCommit")]
-    pub timeout_commit: Option<u64>,
+    // cycle = propose + prevote + precommit + commit, in milliseconds.
+    cycle: u64,
 }
 
 impl Config {
@@ -72,36 +62,20 @@ pub struct TendermintTimer {
     pub commit: Duration,
 }
 
-impl Default for TendermintTimer {
-    fn default() -> Self {
-        TendermintTimer {
-            propose: Duration::from_millis(2400),
-            prevote: Duration::from_millis(100),
-            precommit: Duration::from_millis(100),
-            commit: Duration::from_millis(400),
-        }
-    }
-}
-
 pub struct TendermintParams {
     pub timer: TendermintTimer,
     pub signer: Signer,
 }
 
-fn to_duration(s: u64) -> Duration {
-    Duration::from_millis(s)
-}
-
 impl TendermintParams {
     pub fn new(config: &Config, priv_key: &PrivateKey) -> Self {
-        let dt = TendermintTimer::default();
         TendermintParams {
             signer: Signer::from(priv_key.signer),
             timer: TendermintTimer {
-                propose: config.timeout_propose.map_or(dt.propose, to_duration),
-                prevote: config.timeout_prevote.map_or(dt.prevote, to_duration),
-                precommit: config.timeout_precommit.map_or(dt.precommit, to_duration),
-                commit: config.timeout_commit.map_or(dt.commit, to_duration),
+                propose: Duration::from_millis(config.cycle * 24 / 30),
+                prevote: Duration::from_millis(config.cycle * 1 / 30),
+                precommit: Duration::from_millis(config.cycle * 1 / 30),
+                commit: Duration::from_millis(config.cycle * 4 / 30),
             },
         }
     }
