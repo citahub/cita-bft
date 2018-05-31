@@ -813,7 +813,8 @@ impl TenderMint {
                                 }
                             } else if fround == r && step == fstep
                                 && now - ins
-                                    > self.params.timer.get_prevote() * TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE
+                                    > self.params.timer.get_prevote()
+                                        * TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE
                             {
                                 add_flag = true;
                                 trans_flag = true;

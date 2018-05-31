@@ -56,11 +56,10 @@ impl PrivateKey {
 #[derive(Debug, Clone)]
 pub struct TendermintTimer {
     total_duration: Cell<u64>,
-    total_quota: u64,
-    propose: u64,
-    prevote: u64,
-    precommit: u64,
-    commit: u64,
+    propose: (u64, u64),
+    prevote: (u64, u64),
+    precommit: (u64, u64),
+    commit: (u64, u64),
 }
 
 impl Default for TendermintTimer {
@@ -68,12 +67,11 @@ impl Default for TendermintTimer {
         TendermintTimer {
             // in milliseconds.
             total_duration: Cell::new(3000),
-            //total_quota = propose + prevote + precommit + commit.
-            total_quota: 30,
-            propose: 24,
-            prevote: 1,
-            precommit: 1,
-            commit: 4,
+            // fraction: (numerator, denominator)
+            propose: (24, 30),
+            prevote: (1, 30),
+            precommit: (1, 30),
+            commit: (4, 30),
         }
     }
 }
@@ -84,19 +82,19 @@ impl TendermintTimer {
     }
 
     pub fn get_propose(&self) -> Duration {
-        Duration::from_millis(self.total_duration.get() * self.propose / self.total_quota)
+        Duration::from_millis(self.total_duration.get() * self.propose.0 / self.propose.1)
     }
 
     pub fn get_prevote(&self) -> Duration {
-        Duration::from_millis(self.total_duration.get() * self.prevote / self.total_quota)
+        Duration::from_millis(self.total_duration.get() * self.prevote.0 / self.prevote.1)
     }
 
     pub fn get_precommit(&self) -> Duration {
-        Duration::from_millis(self.total_duration.get() * self.precommit / self.total_quota)
+        Duration::from_millis(self.total_duration.get() * self.precommit.0 / self.precommit.1)
     }
 
     pub fn get_commit(&self) -> Duration {
-        Duration::from_millis(self.total_duration.get() * self.commit / self.total_quota)
+        Duration::from_millis(self.total_duration.get() * self.commit.0 / self.commit.1)
     }
 }
 
