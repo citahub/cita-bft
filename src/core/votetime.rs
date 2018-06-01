@@ -66,9 +66,8 @@ impl WaitTimer {
                             trace!(" ************ {:?}",oksettime);
                             thread::sleep(oksettime.timeval);
                             notify.send(oksettime).unwrap();
-                         });
+                        });
                     }
-
                 }
             }
         }
