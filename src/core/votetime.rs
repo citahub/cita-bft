@@ -56,19 +56,18 @@ impl WaitTimer {
         loop {
             select! {
                 settime = innersetter.recv() =>  {
-                let oksettime = settime.unwrap();
-                let notify = self.timer_notify.clone();
+                    let oksettime = settime.unwrap();
+                    let notify = self.timer_notify.clone();
 
-                if oksettime.timeval == zero_time {
-                    notify.send(oksettime).unwrap();
-                } else {
-                    self.thpool.execute(move || {
-                        trace!(" ************ {:?}",oksettime);
-                        thread::sleep(oksettime.timeval);
+                    if oksettime.timeval == zero_time {
                         notify.send(oksettime).unwrap();
-                     });
-                }
-
+                    } else {
+                        self.thpool.execute(move || {
+                            trace!(" ************ {:?}",oksettime);
+                            thread::sleep(oksettime.timeval);
+                            notify.send(oksettime).unwrap();
+                        });
+                    }
                 }
             }
         }
