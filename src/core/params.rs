@@ -17,6 +17,7 @@
 
 use super::ntp::Ntp;
 use crypto::{PrivKey, Signer};
+use std::cell::Cell;
 use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
@@ -26,18 +27,6 @@ use types::clean_0x;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub ntp_config: Ntp,
-
-    #[serde(rename = "timeoutPropose")]
-    pub timeout_propose: Option<u64>,
-    // Prevote step timeout in milliseconds.
-    #[serde(rename = "timeoutPrevote")]
-    pub timeout_prevote: Option<u64>,
-    // Precommit step timeout in milliseconds.
-    #[serde(rename = "timeoutPrecommit")]
-    pub timeout_precommit: Option<u64>,
-    // Commit step timeout in milliseconds.
-    #[serde(rename = "timeoutCommit")]
-    pub timeout_commit: Option<u64>,
 }
 
 impl Config {
@@ -66,20 +55,46 @@ impl PrivateKey {
 
 #[derive(Debug, Clone)]
 pub struct TendermintTimer {
-    pub propose: Duration,
-    pub prevote: Duration,
-    pub precommit: Duration,
-    pub commit: Duration,
+    // in milliseconds.
+    total_duration: Cell<u64>,
+    // fraction: (numerator, denominator)
+    propose: (u64, u64),
+    prevote: (u64, u64),
+    precommit: (u64, u64),
+    commit: (u64, u64),
 }
 
 impl Default for TendermintTimer {
     fn default() -> Self {
         TendermintTimer {
-            propose: Duration::from_millis(2400),
-            prevote: Duration::from_millis(100),
-            precommit: Duration::from_millis(100),
-            commit: Duration::from_millis(400),
+            total_duration: Cell::new(3000),
+            propose: (24, 30),
+            prevote: (1, 30),
+            precommit: (1, 30),
+            commit: (4, 30),
         }
+    }
+}
+
+impl TendermintTimer {
+    pub fn set_total_duration(&self, duration: u64) {
+        self.total_duration.set(duration);
+    }
+
+    pub fn get_propose(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.propose.0 / self.propose.1)
+    }
+
+    pub fn get_prevote(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.prevote.0 / self.prevote.1)
+    }
+
+    pub fn get_precommit(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.precommit.0 / self.precommit.1)
+    }
+
+    pub fn get_commit(&self) -> Duration {
+        Duration::from_millis(self.total_duration.get() * self.commit.0 / self.commit.1)
     }
 }
 
@@ -88,21 +103,11 @@ pub struct TendermintParams {
     pub signer: Signer,
 }
 
-fn to_duration(s: u64) -> Duration {
-    Duration::from_millis(s)
-}
-
 impl TendermintParams {
-    pub fn new(config: &Config, priv_key: &PrivateKey) -> Self {
-        let dt = TendermintTimer::default();
+    pub fn new(priv_key: &PrivateKey) -> Self {
         TendermintParams {
             signer: Signer::from(priv_key.signer),
-            timer: TendermintTimer {
-                propose: config.timeout_propose.map_or(dt.propose, to_duration),
-                prevote: config.timeout_prevote.map_or(dt.prevote, to_duration),
-                precommit: config.timeout_precommit.map_or(dt.precommit, to_duration),
-                commit: config.timeout_commit.map_or(dt.commit, to_duration),
-            },
+            timer: TendermintTimer::default(),
         }
     }
 }

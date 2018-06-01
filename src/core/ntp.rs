@@ -56,16 +56,15 @@ pub struct Ntp {
 
 impl Ntp {
     /// Check the system clock offset overflow the threshold
-    pub fn clock_offset_overflow(&self) -> bool {
-        let mut offset_overflow = false;
-
+    pub fn is_clock_offset_overflow(&self) -> bool {
         match Ntp::system_clock_offset(self) {
             Ok(offset) => {
                 if offset.num_milliseconds().abs() > self.threshold {
                     debug!("System clock seems off by {}", offset);
-                    offset_overflow = true;
+                    true
+                } else {
+                    false
                 }
-                offset_overflow
             }
             Err(_) => true,
         }
