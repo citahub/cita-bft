@@ -216,7 +216,7 @@ fn main() {
     if ntp_config.enabled {
         thread::spawn(move || loop {
             if ntp_config.is_clock_offset_overflow() {
-                warn!("System clock seems off!!!");
+                //warn!("System clock seems off!!!");
                 log_tag += 1;
                 if log_tag == 10 {
                     log_tag = 0;
