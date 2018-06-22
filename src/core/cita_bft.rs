@@ -1137,8 +1137,12 @@ impl TenderMint {
     }
 
     fn clean_verified_info(&mut self, height: usize, round: usize) {
-        for i in 0..round {
-            self.unverified_msg.remove(&(height, i));
+        if height == 0 {
+            self.unverified_msg.clear();
+        } else {
+            for i in 0..round {
+                self.unverified_msg.remove(&(height, i));
+            }
         }
     }
 
@@ -1562,7 +1566,7 @@ impl TenderMint {
                             self.height = req.end_height as usize - 1;
                             self.round = 0;
                             self.step = Step::PrecommitAuth;
-                            self.clean_verified_info();
+                            self.clean_verified_info(0, 0);
 
                             self.set_snapshot(false);
                             resp.set_resp(Resp::EndAck);
