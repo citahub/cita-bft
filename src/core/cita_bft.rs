@@ -1267,6 +1267,12 @@ impl TenderMint {
             self.round,
             self.step
         );
+
+        if self.get_snapshot() {
+            info!("snapshotting...");
+            return;
+        }
+
         if tminfo.height < self.height {
             return;
         }
@@ -1519,12 +1525,13 @@ impl TenderMint {
                     let mut resp = SnapshotResp::new();
                     match req.cmd {
                         Cmd::Begin => {
+                            info!("[snapshot] receive cmd: Begin");
                             self.set_snapshot(true);
                             resp.set_resp(Resp::BeginAck);
-                            info!("cita-bft resp BeginAck");
                             self.send_snapshot_cmd(resp.clone());
                         }
                         Cmd::Clear => {
+                            info!("[snapshot] receive cmd: Clear");
                             let logpath = DataPath::wal_path();
                             let data_path = DataPath::root_node_path() + "/wal_tmp";
                             self.wal_log = Wal::new(&*data_path).unwrap();
@@ -1532,20 +1539,24 @@ impl TenderMint {
                             self.wal_log = Wal::new(&*logpath).unwrap();
                             fs::remove_dir_all(&data_path);
                             resp.set_resp(Resp::ClearAck);
-                            info!("cita-bft resp ClearAck");
                             self.send_snapshot_cmd(resp.clone());
                         }
                         Cmd::End => {
+                            info!("[snapshot] receive cmd: End");
+                            self.proof = TendermintProof::from(req.get_proof().clone());
+                            self.save_wal_proof();
+
+                            self.height = req.end_height as usize - 1;
+                            self.round = 0;
+                            self.step = Step::PrecommitAuth;
+                            self.clean_verified_info();
+
                             self.set_snapshot(false);
                             resp.set_resp(Resp::EndAck);
-                            info!("cita-bft resp EndAck");
                             self.send_snapshot_cmd(resp.clone());
                         }
                         _ => {
-                            warn!(
-                                "[snapshot_req]receive: unexpected snapshot cmd = {:?}",
-                                req.cmd
-                            );
+                            warn!("[snapshot] receive unexpected cmd = {:?}", req.cmd);
                         }
                     }
                 }
