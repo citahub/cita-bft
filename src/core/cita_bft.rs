@@ -58,6 +58,10 @@ const LOG_TYPE_AUTH_TXS: u8 = 7;
 const TIMEOUT_RETRANSE_MULTIPLE: u32 = 15;
 const TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE: u32 = 20;
 
+const VERIFIED_PROPOSAL_OK: i8 = 1;
+const VERIFIED_PROPOSAL_FAILED: i8 = -1;
+const VERIFIED_PROPOSAL_UNDO: i8 = 0;
+
 pub type TransType = (String, Vec<u8>);
 pub type PubType = (String, Vec<u8>);
 
@@ -132,7 +136,8 @@ pub struct TenderMint {
     htime: Instant,
     auth_manage: AuthorityManage,
     consensus_power: bool,
-    unverified_msg: HashMap<(usize, usize), Message>,
+    //params meaning: key :index 0->height,1->round ,value:0->verified msg,1->verified result
+    unverified_msg: HashMap<(usize, usize), (Message, i8)>,
     // VecDeque might work, Almost always it is better to use Vec or VecDeque instead of LinkedList
     block_txs: VecDeque<(usize, BlockTxs)>,
     block_proof: Option<(usize, BlockWithProof)>,
@@ -400,16 +405,19 @@ impl TenderMint {
         *n == self.auth_manage.authority_n
     }
 
+    fn get_proposal_verified_result(&self, height: usize, round: usize) -> i8 {
+        self.unverified_msg
+            .get(&(height, round))
+            .map_or(VERIFIED_PROPOSAL_OK, |res| res.1)
+    }
+
     fn pre_proc_precommit(&mut self) -> bool {
         let height = self.height;
         let round = self.round;
         let proposal = self.proposal;
-        let mut verify_ok = false;
         let mut lock_ok = false;
 
-        if !self.unverified_msg.contains_key(&(height, round)) {
-            verify_ok = true;
-        }
+        let verify_ok = self.get_proposal_verified_result(height, round);
         if let Some(lround) = self.lock_round {
             trace!(
                 "pre_proc_precommit locked round,{},self round {}",
@@ -421,11 +429,11 @@ impl TenderMint {
             }
         }
         //polc is ok,but not verified , not send precommit
-        if lock_ok && !verify_ok {
+        if lock_ok && verify_ok == VERIFIED_PROPOSAL_UNDO {
             return false;
         }
 
-        if lock_ok && verify_ok {
+        if lock_ok && verify_ok == VERIFIED_PROPOSAL_OK {
             self.pub_and_broadcast_message(height, round, Step::Precommit, proposal);
         } else {
             self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
@@ -638,7 +646,7 @@ impl TenderMint {
         let round = self.round;
 
         //to be optimize
-        self.clean_verified_info();
+        self.clean_verified_info(height, round);
         trace!("commit_block begining {} {}", height, round);
         if let Some(hash) = self.proposal {
             if self.locked_block.is_some() {
@@ -1008,7 +1016,8 @@ impl TenderMint {
                     (&msg).try_into().unwrap(),
                 ))
                 .unwrap();
-            self.unverified_msg.insert((vheight, vround), msg);
+            self.unverified_msg
+                .insert((vheight, vround), (msg, VERIFIED_PROPOSAL_UNDO));
         }
         verify_ok
     }
@@ -1127,8 +1136,14 @@ impl TenderMint {
         self.last_commit_round = None;
     }
 
-    fn clean_verified_info(&mut self) {
-        self.unverified_msg.clear();
+    fn clean_verified_info(&mut self, height: usize, round: usize) {
+        if height == 0 {
+            self.unverified_msg.clear();
+        } else {
+            for i in 0..round {
+                self.unverified_msg.remove(&(height, i));
+            }
+        }
     }
 
     // use iter + cloned, do not copy all block_txs
@@ -1326,15 +1341,18 @@ impl TenderMint {
                 });
             }
         } else if tminfo.step == Step::PrecommitAuth {
-            let msg = self.unverified_msg.get(&(tminfo.height, tminfo.round));
-            if let Some(msg) = msg {
-                self.pub_sender
-                    .send((
-                        routing_key!(Consensus >> VerifyBlockReq).into(),
-                        msg.try_into().unwrap(),
-                    ))
-                    .unwrap();
-            }
+            if let Some((msg, res)) = self.unverified_msg.get(&(tminfo.height, tminfo.round)) {
+                if *res == VERIFIED_PROPOSAL_UNDO {
+                    self.pub_sender
+                        .send((
+                            routing_key!(Consensus >> VerifyBlockReq).into(),
+                            msg.try_into().unwrap(),
+                        ))
+                        .unwrap();
+                } else {
+                    warn!("already get verified resutl {}", *res);
+                }
+            };
         } else if tminfo.step == Step::Precommit {
             /*in this case,need resend prevote : my net server can be connected but other node's
             server not connected when staring.  maybe my node recive enough vote(prevote),but others
@@ -1449,24 +1467,23 @@ impl TenderMint {
                     let (vheight, vround) = get_idx_from_reqid(verify_id);
                     let vheight = vheight as usize;
                     let vround = vround as usize;
-                    let mut verify_ok = false;
-
-                    if self.unverified_msg.contains_key(&(vheight, vround)) {
-                        if resp.get_ret() == auth::Ret::OK {
-                            verify_ok = true;
-                        }
-                        let msg = serialize(&(vheight, vround, verify_ok), Infinite).unwrap();
-                        let _ = self.wal_log.save(LOG_TYPE_VERIFIED_PROPOSE, &msg);
-                        self.unverified_msg
-                            .remove(&(vheight as usize, vround as usize));
+                    let mut verify_res = VERIFIED_PROPOSAL_FAILED;
+                    if resp.get_ret() == auth::Ret::OK {
+                        verify_res = VERIFIED_PROPOSAL_OK;
                     }
+                    if let Some(res) = self.unverified_msg.get_mut(&(vheight, vround)) {
+                        res.1 = verify_res;
+                        let msg = serialize(&(vheight, vround, verify_res), Infinite).unwrap();
+                        let _ = self.wal_log.save(LOG_TYPE_VERIFIED_PROPOSE, &msg);
+                    };
+
                     info!(
                         "recive VERIFYBLKRESP verify_id {} height {} round {} ok {} self height {} round {} step {:?}",
-                        verify_id, vheight, vround, verify_ok, self.height, self.round, self.step
+                        verify_id, vheight, vround, verify_res, self.height, self.round, self.step
                     );
                     if vheight == self.height && vround == self.round {
                         //verify not ok,so clean the proposal info
-                        if verify_ok {
+                        if verify_res == VERIFIED_PROPOSAL_OK {
                             if self.step == Step::PrecommitAuth && self.pre_proc_precommit() {
                                 self.change_state_step(vheight, vround, Step::Precommit, false);
                                 self.proc_precommit(vheight, vround);
@@ -1549,7 +1566,7 @@ impl TenderMint {
                             self.height = req.end_height as usize - 1;
                             self.round = 0;
                             self.step = Step::PrecommitAuth;
-                            self.clean_verified_info();
+                            self.clean_verified_info(0, 0);
 
                             self.set_snapshot(false);
                             resp.set_resp(Resp::EndAck);
@@ -1757,11 +1774,11 @@ impl TenderMint {
             } else if mtype == LOG_TYPE_VERIFIED_PROPOSE {
                 trace!(" LOG_TYPE_VERIFIED_PROPOSE begining!");
                 if let Ok(decode) = deserialize(&vec_out) {
-                    let (vheight, vround, verified): (usize, usize, bool) = decode;
-                    if !verified {
-                        self.clean_saved_info();
-                    } else {
+                    let (vheight, vround, verified): (usize, usize, i8) = decode;
+                    if verified == VERIFIED_PROPOSAL_OK {
                         self.unverified_msg.remove(&(vheight, vround));
+                    } else {
+                        self.clean_saved_info();
                     }
                 }
             } else if mtype == LOG_TYPE_AUTH_TXS {
