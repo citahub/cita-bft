@@ -34,7 +34,6 @@ use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
 use proof::TendermintProof;
-use protobuf::RepeatedField;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::sync::mpsc::{Receiver, RecvError, Sender};
@@ -256,7 +255,7 @@ impl TenderMint {
                 votes.push(vote);
             }
 
-            proto_proposal.set_lock_votes(RepeatedField::from_slice(&votes[..]));
+            proto_proposal.set_lock_votes(votes.into());
         }
 
         let message: Vec<u8> = (&proto_proposal).try_into().unwrap();

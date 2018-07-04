@@ -66,7 +66,6 @@ extern crate logger;
 extern crate lru_cache;
 extern crate ntp;
 extern crate proof;
-extern crate protobuf;
 extern crate pubsub;
 extern crate rustc_hex;
 #[macro_use]
