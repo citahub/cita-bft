@@ -12,7 +12,6 @@ bincode = "0.8.0"
 libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 rustc-serialize = "0.3"
-protobuf = { version = "^1.0.0" }
 clap = "2"
 pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 cita-types = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
