@@ -34,7 +34,7 @@ use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
 use proof::TendermintProof;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::sync::mpsc::{Receiver, RecvError, Sender};
 use std::time::{Duration, Instant};
@@ -136,7 +136,7 @@ pub struct TenderMint {
     auth_manage: AuthorityManage,
     consensus_power: bool,
     //params meaning: key :index 0->height,1->round ,value:0->verified msg,1->verified result
-    unverified_msg: HashMap<(usize, usize), (Message, i8)>,
+    unverified_msg: BTreeMap<(usize, usize), (Message, i8)>,
     // VecDeque might work, Almost always it is better to use Vec or VecDeque instead of LinkedList
     block_txs: VecDeque<(usize, BlockTxs)>,
     block_proof: Option<(usize, BlockWithProof)>,
@@ -180,7 +180,7 @@ impl TenderMint {
             htime: Instant::now(),
             auth_manage: AuthorityManage::new(),
             consensus_power: false,
-            unverified_msg: HashMap::new(),
+            unverified_msg: BTreeMap::new(),
             block_txs: VecDeque::new(),
             block_proof: None,
             is_snapshot: false,
@@ -645,7 +645,7 @@ impl TenderMint {
         let round = self.round;
 
         //to be optimize
-        self.clean_verified_info(height, round);
+        self.clean_verified_info(height);
         trace!("commit_block begining {} {}", height, round);
         if let Some(hash) = self.proposal {
             if self.locked_block.is_some() {
@@ -1135,13 +1135,11 @@ impl TenderMint {
         self.last_commit_round = None;
     }
 
-    fn clean_verified_info(&mut self, height: usize, round: usize) {
+    fn clean_verified_info(&mut self, height: usize) {
         if height == 0 {
             self.unverified_msg.clear();
         } else {
-            for i in 0..round {
-                self.unverified_msg.remove(&(height, i));
-            }
+            self.unverified_msg = self.unverified_msg.split_off(&(height + 1, 0));
         }
     }
 
@@ -1565,7 +1563,7 @@ impl TenderMint {
                             self.height = req.end_height as usize - 1;
                             self.round = 0;
                             self.step = Step::PrecommitAuth;
-                            self.clean_verified_info(0, 0);
+                            self.clean_verified_info(0);
 
                             self.set_snapshot(false);
                             resp.set_resp(Resp::EndAck);
