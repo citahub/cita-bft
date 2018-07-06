@@ -190,10 +190,8 @@ fn main() {
     });
 
     let config = Config::new(config_path);
-    info!("CITA:bft config \n {:?}", config);
 
     let pk = PrivateKey::new(pk_path);
-    info!("CITA:bft signer \n {:?}", pk);
 
     // main cita-bft loop module
     let params = TendermintParams::new(&pk);
