@@ -1448,7 +1448,7 @@ impl TenderMint {
                     if authorities.contains(&self.params.signer.address) {
                         self.consensus_power = true;
                     } else {
-                        trace!(
+                        warn!(
                             "address[{:?}] is not consensus power !",
                             self.params.signer.address
                         );
