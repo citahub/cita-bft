@@ -552,10 +552,10 @@ impl TenderMint {
         false
     }
 
-    fn save_wal_proof(&mut self) {
+    fn save_wal_proof(&mut self, height: usize) {
         //let msg = self.proof.clone();
         let bmsg = serialize(&self.proof, Infinite).unwrap();
-        let _ = self.wal_log.save(LOG_TYPE_COMMITS, &bmsg);
+        let _ = self.wal_log.save(height, LOG_TYPE_COMMITS, &bmsg);
     }
 
     fn proc_commit_after(&mut self, height: usize, round: usize) -> bool {
@@ -568,7 +568,7 @@ impl TenderMint {
             self.change_state_step(height + 1, INIT_ROUND, Step::Propose, true);
             if let Some(hash) = self.pre_hash {
                 let buf = hash.to_vec();
-                let _ = self.wal_log.save(LOG_TYPE_PREV_HASH, &buf);
+                let _ = self.wal_log.save(height + 1, LOG_TYPE_PREV_HASH, &buf);
             }
 
             if self.proof.height != now_height && now_height > 0 {
@@ -588,7 +588,7 @@ impl TenderMint {
             }
             if !self.proof.is_default() {
                 if self.proof.height == now_height {
-                    self.save_wal_proof();
+                    self.save_wal_proof(now_height);
                 } else {
                     trace!(
                         "try my best to save proof not ok,at height {} round {} now height {}",
@@ -664,7 +664,7 @@ impl TenderMint {
                     if gen_flag {
                         self.proof = proof.clone();
                     }
-                    self.save_wal_proof();
+                    self.save_wal_proof(height + 1);
 
                     let mut proof_blk = BlockWithProof::new();
                     let blk = self.locked_block.clone();
@@ -730,7 +730,7 @@ impl TenderMint {
         //self.wal_log.save(LOG_TYPE_VOTE,&msg).unwrap();
 
         if self.height >= height || (self.height == height && self.round >= round) {
-            self.votes.add(
+            let ret = self.votes.add(
                 height,
                 round,
                 step,
@@ -740,6 +740,10 @@ impl TenderMint {
                     signature,
                 },
             );
+
+            if ret {
+                self.wal_log.save(height, LOG_TYPE_VOTE, &msg).unwrap();
+            }
         }
     }
 
@@ -758,7 +762,7 @@ impl TenderMint {
         }
 
         let message = serialize(&(height, round, s), Infinite).unwrap();
-        let _ = self.wal_log.save(LOG_TYPE_STATE, &message);
+        let _ = self.wal_log.save(height, LOG_TYPE_STATE, &message);
     }
 
     fn handle_state(&mut self, msg: &[u8]) {
@@ -775,7 +779,6 @@ impl TenderMint {
         message: &[u8],
         wal_flag: bool,
     ) -> Result<(usize, usize, Step), EngineError> {
-        trace!("handle_message beginning now !");
         let log_msg = message.to_owned();
         let res = deserialize(&message[..]);
         if let Ok(decoded) = res {
@@ -870,7 +873,7 @@ impl TenderMint {
                         );
                         if ret {
                             if wal_flag {
-                                self.wal_log.save(LOG_TYPE_VOTE, &log_msg).unwrap();
+                                self.wal_log.save(h, LOG_TYPE_VOTE, &log_msg).unwrap();
                             }
                             if h > self.height {
                                 return Err(EngineError::VoteMsgForth(h));
@@ -897,7 +900,7 @@ impl TenderMint {
                 self.round
             );
             if !proposal.check(height, &self.auth_manage.authorities) {
-                trace!("proc proposal check error");
+                warn!("proc proposal check authorities error");
                 return false;
             }
             //height 1's block not have prehash
@@ -908,7 +911,7 @@ impl TenderMint {
                 block_prehash.extend_from_slice(block.get_header().get_prevhash());
                 {
                     if hash != H256::from(block_prehash.as_slice()) {
-                        trace!(
+                        warn!(
                             "proc proposal pre_hash error height {} round {} self height {} round {}",
                             height,
                             round,
@@ -998,11 +1001,10 @@ impl TenderMint {
             result
         });
         if (len > 0) && verify_ok {
-            trace!("Going to send block verify request to auth");
             let reqid = gen_reqid_from_idx(vheight as u64, vround as u64);
             let verify_req = block.block_verify_req(reqid);
             trace!(
-                "verify_req with {} txs with block verify request id: {} and height:{} round {} ",
+                "send verify_req with {} txs with block verify request id: {} and height:{} round {} ",
                 len,
                 reqid,
                 vheight,
@@ -1027,17 +1029,14 @@ impl TenderMint {
         wal_flag: bool,
         need_verify: bool,
     ) -> Result<(usize, usize), EngineError> {
-        trace!(
-            "handle_proposal params wal_flag {}, need_verify {}",
-            wal_flag,
-            need_verify
-        );
         let signed_proposal = SignedProposal::try_from(msg);
         trace!(
-            "handle proposal here self height {} round {} step {:?}",
+            "handle proposal here self height {} round {} step {:?} wal_flag {}, need_verify {}",
             self.height,
             self.round,
-            self.step
+            self.step,
+            wal_flag,
+            need_verify
         );
         if let Ok(signed_proposal) = signed_proposal {
             let signature = signed_proposal.get_signature();
@@ -1057,11 +1056,9 @@ impl TenderMint {
                         && round == self.round
                         && self.step > Step::ProposeWait)
                 {
-                    trace!(
+                    debug!(
                         "handle proposal get old proposal now height {} round {} step {:?}",
-                        self.height,
-                        self.round,
-                        self.step
+                        self.height, self.round, self.step
                     );
                     return Err(EngineError::VoteMsgDelay(height));
                 }
@@ -1075,19 +1072,19 @@ impl TenderMint {
                 );
 
                 if need_verify && !self.verify_req(&block, height, round) {
-                    trace!("handle_proposal verify_req is error");
+                    warn!("handle_proposal verify_req is error");
                     return Err(EngineError::InvalidTxInProposal);
                 }
 
                 let ret = self.is_round_proposer(height, round, &pubkey_to_address(&pubkey));
                 if ret.is_err() {
-                    trace!("handle_proposal is_round_proposer {:?}", ret);
+                    warn!("handle_proposal is_round_proposer {:?}", ret);
                     return Err(ret.err().unwrap());
                 }
 
                 if (height == self.height && round >= self.round) || height > self.height {
                     if wal_flag && height == self.height {
-                        self.wal_log.save(LOG_TYPE_PROPOSE, msg).unwrap();
+                        self.wal_log.save(height, LOG_TYPE_PROPOSE, msg).unwrap();
                     }
                     debug!("add proposal height {} round {}!", height, round);
                     let blk = block.try_into().unwrap();
@@ -1177,11 +1174,12 @@ impl TenderMint {
                 lock_round: Some(lock_round),
                 lock_votes: lock_vote.clone(),
             };
-            trace!("pub proposal");
             let bmsg = self.pub_proposal(&proposal);
-            self.wal_log.save(LOG_TYPE_PROPOSE, &bmsg).unwrap();
+            self.wal_log
+                .save(self.height, LOG_TYPE_PROPOSE, &bmsg)
+                .unwrap();
             trace!(
-                "proposor vote locked block: height {}, round {}",
+                "pub_proposal proposer vote locked block: height {}, round {}",
                 self.height,
                 self.round
             );
@@ -1211,24 +1209,23 @@ impl TenderMint {
                     .mut_header()
                     .set_prevhash(self.pre_hash.unwrap().0.to_vec());
             } else {
-                trace!(
+                info!(
                     "in new_proposal,self.pre_hash is none: height {}, round {}",
-                    self.height,
-                    self.round
+                    self.height, self.round
                 );
                 //block.mut_header().set_prevhash(H256::default().0.to_vec());
             }
 
             let proof = self.proof.clone();
             if proof.is_default() && self.height > INIT_HEIGHT {
-                warn!(
+                info!(
                     "there is no proof height {} round {}",
                     self.height, self.round
                 );
                 return;
             }
             if self.height > INIT_HEIGHT && proof.height != self.height - 1 {
-                warn!(
+                info!(
                     "proof is old,proof height {}, bft height {}",
                     proof.height, self.height
                 );
@@ -1262,11 +1259,11 @@ impl TenderMint {
                 lock_round: None,
                 lock_votes: None,
             };
-            trace!("pub proposal in not locked");
-
             let bmsg = self.pub_proposal(&proposal);
-            self.wal_log.save(LOG_TYPE_PROPOSE, &bmsg).unwrap();
-            trace!("proposor vote myslef in not locked");
+            self.wal_log
+                .save(self.height, LOG_TYPE_PROPOSE, &bmsg)
+                .unwrap();
+            trace!("pub proposal proposor vote myslef in not locked");
             self.proposals.add(self.height, self.round, proposal);
         }
     }
@@ -1398,7 +1395,7 @@ impl TenderMint {
                     let res = self.handle_proposal(&signed_proposal_bytes[..], true, true);
                     if let Ok((h, r)) = res {
                         trace!(
-                            "recive handle_proposal {:?} self height {} round {} step {:?}",
+                            "recive handle_proposal ok {:?} self height {} round {} step {:?}",
                             (h, r),
                             self.height,
                             self.round,
@@ -1448,7 +1445,7 @@ impl TenderMint {
                     if authorities.contains(&self.params.signer.address) {
                         self.consensus_power = true;
                     } else {
-                        warn!(
+                        info!(
                             "address[{:?}] is not consensus power !",
                             self.params.signer.address
                         );
@@ -1471,7 +1468,7 @@ impl TenderMint {
                     if let Some(res) = self.unverified_msg.get_mut(&(vheight, vround)) {
                         res.1 = verify_res;
                         let msg = serialize(&(vheight, vround, verify_res), Infinite).unwrap();
-                        let _ = self.wal_log.save(LOG_TYPE_VERIFIED_PROPOSE, &msg);
+                        let _ = self.wal_log.save(vheight, LOG_TYPE_VERIFIED_PROPOSE, &msg);
                     };
 
                     info!(
@@ -1515,7 +1512,7 @@ impl TenderMint {
                     let height = block_txs.get_height() as usize;
                     let msg: Vec<u8> = (&block_txs).try_into().unwrap();
                     self.block_txs.push_back((height, block_txs));
-                    let _ = self.wal_log.save(LOG_TYPE_AUTH_TXS, &msg);
+                    let _ = self.wal_log.save(height, LOG_TYPE_AUTH_TXS, &msg);
                     let now_height = self.height;
                     let now_round = self.round;
                     let now_step = self.step;
@@ -1558,8 +1555,8 @@ impl TenderMint {
                         Cmd::End => {
                             info!("[snapshot] receive cmd: End");
                             self.proof = TendermintProof::from(req.get_proof().clone());
-                            self.save_wal_proof();
-
+                            let hi = self.height;
+                            self.save_wal_proof(hi);
                             self.height = req.end_height as usize - 1;
                             self.round = 0;
                             self.step = Step::PrecommitAuth;
