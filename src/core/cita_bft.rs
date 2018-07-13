@@ -1083,7 +1083,7 @@ impl TenderMint {
                 }
 
                 if (height == self.height && round >= self.round) || height > self.height {
-                    if wal_flag && height == self.height {
+                    if wal_flag {
                         self.wal_log.save(height, LOG_TYPE_PROPOSE, msg).unwrap();
                     }
                     debug!("add proposal height {} round {}!", height, round);
