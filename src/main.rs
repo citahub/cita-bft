@@ -17,7 +17,7 @@
 
 //! ## Summary
 //!
-//! One of CITA's core components, implementation of variants of Tendermint consensus algorithm.
+//! One of CITA's core components, implementation of variants of Bft consensus algorithm.
 //! The entire process is driven by timeout mechanisms and voting.
 //!
 //! ### Message queuing situation
@@ -80,8 +80,8 @@ use std::sync::mpsc::channel;
 use std::thread;
 
 mod core;
-use core::cita_bft::TenderMint;
-use core::params::{Config, PrivateKey, TendermintParams};
+use core::cita_bft::Bft;
+use core::params::{BftParams, Config, PrivateKey};
 use core::votetime::WaitTimer;
 use cpuprofiler::PROFILER;
 use libproto::router::{MsgType, RoutingKey, SubModules};
@@ -194,9 +194,9 @@ fn main() {
     let pk = PrivateKey::new(pk_path);
 
     // main cita-bft loop module
-    let params = TendermintParams::new(&pk);
+    let params = BftParams::new(&pk);
     let mainthd = thread::spawn(move || {
-        let mut engine = TenderMint::new(tx_pub, main4mq, main2timer, main4timer, params);
+        let mut engine = Bft::new(tx_pub, main4mq, main2timer, main4timer, params);
         engine.start();
     });
 

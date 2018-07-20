@@ -54,7 +54,7 @@ impl PrivateKey {
 }
 
 #[derive(Debug, Clone)]
-pub struct TendermintTimer {
+pub struct BftTimer {
     // in milliseconds.
     total_duration: Cell<u64>,
     // fraction: (numerator, denominator)
@@ -64,9 +64,9 @@ pub struct TendermintTimer {
     commit: (u64, u64),
 }
 
-impl Default for TendermintTimer {
+impl Default for BftTimer {
     fn default() -> Self {
-        TendermintTimer {
+        BftTimer {
             total_duration: Cell::new(3000),
             propose: (24, 30),
             prevote: (1, 30),
@@ -76,7 +76,7 @@ impl Default for TendermintTimer {
     }
 }
 
-impl TendermintTimer {
+impl BftTimer {
     pub fn set_total_duration(&self, duration: u64) {
         self.total_duration.set(duration);
     }
@@ -98,16 +98,16 @@ impl TendermintTimer {
     }
 }
 
-pub struct TendermintParams {
-    pub timer: TendermintTimer,
+pub struct BftParams {
+    pub timer: BftTimer,
     pub signer: Signer,
 }
 
-impl TendermintParams {
+impl BftParams {
     pub fn new(priv_key: &PrivateKey) -> Self {
-        TendermintParams {
+        BftParams {
             signer: Signer::from(priv_key.signer),
-            timer: TendermintTimer::default(),
+            timer: BftTimer::default(),
         }
     }
 }

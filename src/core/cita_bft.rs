@@ -20,7 +20,7 @@ use std::convert::{Into, TryFrom, TryInto};
 use authority_manage::AuthorityManage;
 use bincode::{deserialize, serialize, Infinite};
 
-use core::params::TendermintParams;
+use core::params::BftParams;
 use core::voteset::{verify_tx, Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet};
 
 use core::votetime::TimeoutInfo;
@@ -33,7 +33,7 @@ use libproto::consensus::{Proposal as ProtoProposal, SignedProposal, Vote as Pro
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
-use proof::TendermintProof;
+use proof::BftProof;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::sync::mpsc::{Receiver, RecvError, Sender};
@@ -108,18 +108,18 @@ fn get_idx_from_reqid(reqid: u64) -> (u64, u64) {
     (reqid >> 16, reqid & 0xffff)
 }
 
-pub struct TenderMint {
+pub struct Bft {
     pub_sender: Sender<PubType>,
     pub_recver: Receiver<TransType>,
 
     timer_seter: Sender<TimeoutInfo>,
     timer_notity: Receiver<TimeoutInfo>,
 
-    params: TendermintParams,
+    params: BftParams,
     height: usize,
     round: usize,
     step: Step,
-    proof: TendermintProof,
+    proof: BftProof,
     pre_hash: Option<H256>,
     votes: VoteCollector,
     proposals: ProposalCollector,
@@ -145,18 +145,18 @@ pub struct TenderMint {
     is_snapshot: bool,
 }
 
-impl TenderMint {
+impl Bft {
     pub fn new(
         s: Sender<PubType>,
         r: Receiver<TransType>,
         ts: Sender<TimeoutInfo>,
         rs: Receiver<TimeoutInfo>,
-        params: TendermintParams,
-    ) -> TenderMint {
-        let proof = TendermintProof::default();
+        params: BftParams,
+    ) -> Bft {
+        let proof = BftProof::default();
 
         let logpath = DataPath::wal_path();
-        TenderMint {
+        Bft {
             pub_sender: s,
             pub_recver: r,
             timer_seter: ts,
@@ -606,12 +606,7 @@ impl TenderMint {
         false
     }
 
-    fn generate_proof(
-        &mut self,
-        height: usize,
-        round: usize,
-        hash: H256,
-    ) -> Option<TendermintProof> {
+    fn generate_proof(&mut self, height: usize, round: usize, hash: H256) -> Option<BftProof> {
         let mut commits = HashMap::new();
         {
             let vote_set = self.votes.get_voteset(height, round, Step::Precommit);
@@ -631,7 +626,7 @@ impl TenderMint {
                 return None;
             }
         }
-        let mut proof = TendermintProof::default();
+        let mut proof = BftProof::default();
         proof.height = height;
         proof.round = round;
         proof.proposal = hash;
@@ -924,7 +919,7 @@ impl TenderMint {
 
                 //proof : self.params vs proposal's block's broof
                 let block_proof = block.get_header().get_proof();
-                let proof = TendermintProof::from(block_proof.clone());
+                let proof = BftProof::from(block_proof.clone());
                 debug!(" proof is {:?}  {} {}", proof, height, round);
                 if self.auth_manage.authority_h_old == height - 1 {
                     if !proof.check(height - 1, &self.auth_manage.authorities_old) {
@@ -1554,7 +1549,7 @@ impl TenderMint {
                         }
                         Cmd::End => {
                             info!("[snapshot] receive cmd: End");
-                            self.proof = TendermintProof::from(req.get_proof().clone());
+                            self.proof = BftProof::from(req.get_proof().clone());
                             let hi = self.height;
                             self.save_wal_proof(hi);
                             self.height = req.end_height as usize - 1;
