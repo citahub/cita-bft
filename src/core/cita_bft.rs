@@ -1568,13 +1568,16 @@ impl Bft {
                         Cmd::End => {
                             info!("[snapshot] receive cmd: End");
                             if self.is_cleared {
+                                self.clean_verified_info(0);
+                                self.clean_saved_info();
+                                self.proposals.proposals.clear();
                                 self.proof = BftProof::from(req.get_proof().clone());
                                 let hi = self.height;
                                 self.save_wal_proof(hi);
                                 self.height = req.end_height as usize;
                                 self.round = 0;
                                 self.step = Step::PrecommitAuth;
-                                self.clean_verified_info(0);
+                                self.pre_hash = None;
                             }
 
                             self.set_snapshot(false);
