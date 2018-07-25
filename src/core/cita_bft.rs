@@ -1571,7 +1571,7 @@ impl Bft {
                                 self.proof = BftProof::from(req.get_proof().clone());
                                 let hi = self.height;
                                 self.save_wal_proof(hi);
-                                self.height = req.end_height as usize - 1;
+                                self.height = req.end_height as usize;
                                 self.round = 0;
                                 self.step = Step::PrecommitAuth;
                                 self.clean_verified_info(0);
