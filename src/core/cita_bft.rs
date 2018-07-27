@@ -311,7 +311,7 @@ impl Bft {
             self.pub_and_broadcast_message(height, round, Step::Prevote, Some(H256::default()));
         }
         //this is for timeout resending votes
-        self.timer_seter.send(TimeoutInfo {
+        let _ = self.timer_seter.send(TimeoutInfo {
             timeval: self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE,
             height: height,
             round: round,
@@ -387,7 +387,7 @@ impl Bft {
 
                 if self.step == Step::Prevote {
                     self.change_state_step(height, round, Step::PrevoteWait, false);
-                    self.timer_seter.send(TimeoutInfo {
+                    let _ = self.timer_seter.send(TimeoutInfo {
                         timeval: tv,
                         height: height,
                         round: round,
@@ -443,7 +443,7 @@ impl Bft {
         }
 
         //timeout for resending vote msg
-        self.timer_seter.send(TimeoutInfo {
+        let _ = self.timer_seter.send(TimeoutInfo {
             timeval: self.params.timer.get_precommit() * TIMEOUT_RETRANSE_MULTIPLE,
             height: self.height,
             round: self.round,
@@ -523,7 +523,7 @@ impl Bft {
 
                 if self.step == Step::Precommit {
                     self.change_state_step(height, round, Step::PrecommitWait, false);
-                    self.timer_seter.send(TimeoutInfo {
+                    let _ = self.timer_seter.send(TimeoutInfo {
                         timeval: tv,
                         height: height,
                         round: round,
@@ -671,7 +671,7 @@ impl Bft {
                     proof_blk.set_proof(proof.into());
 
                     // saved for retranse blockwithproof to chain
-                    self.block_proof == Some((height, proof_blk.clone()));
+                    self.block_proof = Some((height, proof_blk.clone()));
                     info!(
                         "commit block height {} with round {} consensus time {:?} ",
                         height,
@@ -1326,7 +1326,7 @@ impl Bft {
                 self.proc_precommit(tminfo.height, tminfo.round);
             } else {
                 self.change_state_step(tminfo.height, tminfo.round, Step::PrecommitAuth, false);
-                self.timer_seter.send(TimeoutInfo {
+                let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE,
                     height: tminfo.height,
                     round: tminfo.round,
@@ -1402,7 +1402,7 @@ impl Bft {
                         );
                         if h == self.height && r == self.round && self.step < Step::Prevote {
                             self.step = Step::ProposeWait;
-                            self.timer_seter.send(TimeoutInfo {
+                            let _ = self.timer_seter.send(TimeoutInfo {
                                 timeval: Duration::new(0, 0),
                                 height: h,
                                 round: r,
@@ -1522,7 +1522,7 @@ impl Bft {
                         && self.proposal.is_none()
                     {
                         self.new_proposal();
-                        self.timer_seter.send(TimeoutInfo {
+                        let _ = self.timer_seter.send(TimeoutInfo {
                             timeval: Duration::new(0, 0),
                             height: now_height,
                             round: now_round,
@@ -1555,9 +1555,9 @@ impl Bft {
                             let logpath = DataPath::wal_path();
                             let data_path = DataPath::root_node_path() + "/wal_tmp";
                             self.wal_log = Wal::new(&*data_path).unwrap();
-                            fs::remove_dir_all(&logpath);
+                            let _ = fs::remove_dir_all(&logpath);
                             self.wal_log = Wal::new(&*logpath).unwrap();
-                            fs::remove_dir_all(&data_path);
+                            let _ = fs::remove_dir_all(&data_path);
 
                             self.is_cleared = true;
 
@@ -1669,7 +1669,7 @@ impl Bft {
             "get new chain status height {} round {} cost time {:?} ",
             status_height, self.round, cost_time
         );
-        self.timer_seter.send(TimeoutInfo {
+        let _ = self.timer_seter.send(TimeoutInfo {
             timeval: tv,
             height: status_height,
             round: r,
@@ -1690,7 +1690,7 @@ impl Bft {
         }
         //if is proposal,enter prevote stage immedietly
         self.step = Step::ProposeWait;
-        self.timer_seter.send(TimeoutInfo {
+        let _ = self.timer_seter.send(TimeoutInfo {
             timeval: tv,
             height: height,
             round: round,
@@ -1710,7 +1710,7 @@ impl Bft {
             self.proc_prevote(height, round);
 
             if self.step == Step::PrevoteWait {
-                self.timer_seter.send(TimeoutInfo {
+                let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: self.params.timer.get_prevote(),
                     height: height,
                     round: round,
@@ -1721,7 +1721,7 @@ impl Bft {
             self.pre_proc_precommit();
             self.proc_precommit(height, round);
             if self.step == Step::PrecommitWait {
-                self.timer_seter.send(TimeoutInfo {
+                let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: self.params.timer.get_precommit(),
                     height: height,
                     round: round,

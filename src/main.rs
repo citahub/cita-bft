@@ -44,10 +44,6 @@
 //!     | consensus | Consensus | Snapshot        | SnapshotResp    |
 //!
 
-#![cfg_attr(feature = "clippy", feature(plugin))]
-#![cfg_attr(feature = "clippy", plugin(clippy))]
-#![feature(custom_attribute)]
-#![allow(unused_must_use)]
 #![feature(mpsc_select)]
 #![feature(try_from)]
 

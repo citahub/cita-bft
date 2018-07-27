@@ -94,7 +94,7 @@ impl Wal {
         self.ifile.seek(io::SeekFrom::Start(0))?;
         let hstr = height.to_string();
         let content = hstr.as_bytes();
-        self.ifile.set_len(content.len() as u64);
+        let _ = self.ifile.set_len(content.len() as u64);
         self.ifile.write_all(&content)?;
         self.ifile.sync_data()?;
 
