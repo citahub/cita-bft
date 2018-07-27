@@ -120,7 +120,6 @@ impl StepCollector {
         }
     }
 
-    #[cfg_attr(feature = "clippy", allow(map_entry))]
     pub fn add(&mut self, step: Step, sender: Address, vote: VoteMessage) -> bool {
         if self.step_votes.contains_key(&step) {
             self.step_votes.get_mut(&step).unwrap().add(sender, vote)
@@ -159,7 +158,6 @@ impl VoteSet {
     }
 
     //just add ,not check
-    #[cfg_attr(feature = "clippy", allow(map_entry))]
     pub fn add(&mut self, sender: Address, vote: VoteMessage) -> bool {
         if self.votes_by_sender.contains_key(&sender) {
             false
