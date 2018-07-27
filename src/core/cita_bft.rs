@@ -143,6 +143,9 @@ pub struct Bft {
 
     // when snaphsot restore, clear wal data
     is_snapshot: bool,
+
+    // whether the datas above have been cleared.
+    is_cleared: bool,
 }
 
 impl Bft {
@@ -184,6 +187,7 @@ impl Bft {
             block_txs: VecDeque::new(),
             block_proof: None,
             is_snapshot: false,
+            is_cleared: false,
         }
     }
 
@@ -1529,12 +1533,22 @@ impl Bft {
                 routing_key!(Snapshot >> SnapshotReq) => {
                     let req = msg.take_snapshot_req().unwrap();
                     let mut resp = SnapshotResp::new();
+                    let mut send = false;
                     match req.cmd {
+                        Cmd::Snapshot => {
+                            info!("[snapshot] receive cmd: Snapshot");
+                        }
                         Cmd::Begin => {
                             info!("[snapshot] receive cmd: Begin");
                             self.set_snapshot(true);
+                            self.is_cleared = false;
+
                             resp.set_resp(Resp::BeginAck);
-                            self.send_snapshot_cmd(resp.clone());
+                            resp.set_flag(true);
+                            send = true;
+                        }
+                        Cmd::Restore => {
+                            info!("[snapshot] receive cmd: Restore");
                         }
                         Cmd::Clear => {
                             info!("[snapshot] receive cmd: Clear");
@@ -1544,41 +1558,50 @@ impl Bft {
                             fs::remove_dir_all(&logpath);
                             self.wal_log = Wal::new(&*logpath).unwrap();
                             fs::remove_dir_all(&data_path);
+
+                            self.is_cleared = true;
+
                             resp.set_resp(Resp::ClearAck);
-                            self.send_snapshot_cmd(resp.clone());
+                            resp.set_flag(true);
+                            send = true;
                         }
                         Cmd::End => {
                             info!("[snapshot] receive cmd: End");
-                            self.proof = BftProof::from(req.get_proof().clone());
-                            let hi = self.height;
-                            self.save_wal_proof(hi);
-                            self.height = req.end_height as usize - 1;
-                            self.round = 0;
-                            self.step = Step::PrecommitAuth;
-                            self.clean_verified_info(0);
+                            if self.is_cleared {
+                                self.clean_verified_info(0);
+                                self.clean_saved_info();
+                                self.proposals.proposals.clear();
+                                self.proof = BftProof::from(req.get_proof().clone());
+                                let hi = self.height;
+                                self.save_wal_proof(hi);
+                                self.height = req.end_height as usize;
+                                self.round = 0;
+                                self.step = Step::PrecommitAuth;
+                                self.pre_hash = None;
+                            }
 
                             self.set_snapshot(false);
+                            self.is_cleared = false;
+
                             resp.set_resp(Resp::EndAck);
-                            self.send_snapshot_cmd(resp.clone());
+                            resp.set_flag(true);
+                            send = true;
                         }
-                        _ => {
-                            warn!("[snapshot] receive unexpected cmd = {:?}", req.cmd);
-                        }
+                    }
+
+                    if send {
+                        let msg: Message = resp.into();
+                        self.pub_sender
+                            .send((
+                                routing_key!(Consensus >> SnapshotResp).into(),
+                                (&msg).try_into().unwrap(),
+                            ))
+                            .unwrap();
                     }
                 }
                 _ => {}
             }
         }
-    }
-
-    fn send_snapshot_cmd(&mut self, snap_shot: SnapshotResp) {
-        let msg: Message = snap_shot.into();
-        self.pub_sender
-            .send((
-                routing_key!(Consensus >> SnapshotResp).into(),
-                (&msg).try_into().unwrap(),
-            ))
-            .unwrap();
     }
 
     fn receive_new_status(&mut self, status: &RichStatus) {
