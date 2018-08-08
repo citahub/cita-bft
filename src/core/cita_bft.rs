@@ -1552,12 +1552,12 @@ impl Bft {
                         }
                         Cmd::Clear => {
                             info!("[snapshot] receive cmd: Clear");
-                            let logpath = DataPath::wal_path();
-                            let data_path = DataPath::root_node_path() + "/wal_tmp";
-                            self.wal_log = Wal::new(&*data_path).unwrap();
-                            let _ = fs::remove_dir_all(&logpath);
-                            self.wal_log = Wal::new(&*logpath).unwrap();
-                            let _ = fs::remove_dir_all(&data_path);
+                            let walpath = DataPath::wal_path();
+                            let tmp_path = DataPath::root_node_path() + "/wal_tmp";
+                            self.wal_log = Wal::new(&*tmp_path).unwrap();
+                            let _ = fs::remove_dir_all(&walpath);
+                            self.wal_log = Wal::new(&*walpath).unwrap();
+                            let _ = fs::remove_dir_all(&tmp_path);
 
                             self.is_cleared = true;
 
@@ -1568,16 +1568,21 @@ impl Bft {
                         Cmd::End => {
                             info!("[snapshot] receive cmd: End");
                             if self.is_cleared {
+                                self.consensus_power = false;
                                 self.clean_verified_info(0);
                                 self.clean_saved_info();
+                                self.clean_filter_info();
+                                self.block_txs.clear();
                                 self.proposals.proposals.clear();
+                                self.votes.votes.clear();
                                 self.proof = BftProof::from(req.get_proof().clone());
-                                let hi = self.height;
-                                self.save_wal_proof(hi);
+                                self.pre_hash = None;
+                                self.block_proof = None;
                                 self.height = req.end_height as usize;
                                 self.round = 0;
                                 self.step = Step::PrecommitAuth;
-                                self.pre_hash = None;
+                                let hi = self.height;
+                                self.save_wal_proof(hi);
                             }
 
                             self.set_snapshot(false);
@@ -1613,7 +1618,7 @@ impl Bft {
         let step = self.step;
         trace!(
             "new_status new height {:?} self height {}",
-            status_height + 1,
+            status_height,
             height
         );
         if height > 0 && status_height + 1 < height {
