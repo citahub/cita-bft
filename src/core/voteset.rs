@@ -121,14 +121,10 @@ impl StepCollector {
     }
 
     pub fn add(&mut self, step: Step, sender: Address, vote: VoteMessage) -> bool {
-        if self.step_votes.contains_key(&step) {
-            self.step_votes.get_mut(&step).unwrap().add(sender, vote)
-        } else {
-            let mut vote_set = VoteSet::new();
-            vote_set.add(sender, vote);
-            self.step_votes.insert(step, vote_set);
-            true
-        }
+        self.step_votes
+            .entry(step)
+            .or_insert_with(VoteSet::new)
+            .add(sender, vote)
     }
 
     pub fn get_voteset(&self, step: Step) -> Option<VoteSet> {

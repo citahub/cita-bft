@@ -165,11 +165,11 @@ impl Bft {
             timer_seter: ts,
             timer_notity: rs,
 
-            params: params,
+            params,
             height: 0,
             round: INIT_ROUND,
             step: Step::Propose,
-            proof: proof,
+            proof,
             pre_hash: None,
             votes: VoteCollector::new(),
             proposals: ProposalCollector::new(),
@@ -313,8 +313,8 @@ impl Bft {
         //this is for timeout resending votes
         let _ = self.timer_seter.send(TimeoutInfo {
             timeval: self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE,
-            height: height,
-            round: round,
+            height,
+            round,
             step: Step::Prevote,
         });
     }
@@ -389,8 +389,8 @@ impl Bft {
                     self.change_state_step(height, round, Step::PrevoteWait, false);
                     let _ = self.timer_seter.send(TimeoutInfo {
                         timeval: tv,
-                        height: height,
-                        round: round,
+                        height,
+                        round,
                         step: Step::PrevoteWait,
                     });
                 }
@@ -525,8 +525,8 @@ impl Bft {
                     self.change_state_step(height, round, Step::PrecommitWait, false);
                     let _ = self.timer_seter.send(TimeoutInfo {
                         timeval: tv,
-                        height: height,
-                        round: round,
+                        height,
+                        round,
                         step: Step::PrecommitWait,
                     });
                 }
@@ -867,7 +867,7 @@ impl Bft {
                             sender,
                             VoteMessage {
                                 proposal: hash,
-                                signature: signature,
+                                signature,
                             },
                         );
                         if ret {
@@ -1107,8 +1107,8 @@ impl Bft {
 
                     let proposal = Proposal {
                         block: blk,
-                        lock_round: lock_round,
-                        lock_votes: lock_votes,
+                        lock_round,
+                        lock_votes,
                     };
 
                     self.proposals.add(height, round, proposal);
@@ -1460,10 +1460,13 @@ impl Bft {
                     let (vheight, vround) = get_idx_from_reqid(verify_id);
                     let vheight = vheight as usize;
                     let vround = vround as usize;
-                    let mut verify_res = VERIFIED_PROPOSAL_FAILED;
-                    if resp.get_ret() == auth::Ret::OK {
-                        verify_res = VERIFIED_PROPOSAL_OK;
-                    }
+
+                    let verify_res = if resp.get_ret() == auth::Ret::OK {
+                        VERIFIED_PROPOSAL_OK
+                    } else {
+                        VERIFIED_PROPOSAL_FAILED
+                    };
+
                     if let Some(res) = self.unverified_msg.get_mut(&(vheight, vround)) {
                         res.1 = verify_res;
                         let msg = serialize(&(vheight, vround, verify_res), Infinite).unwrap();
@@ -1697,8 +1700,8 @@ impl Bft {
         self.step = Step::ProposeWait;
         let _ = self.timer_seter.send(TimeoutInfo {
             timeval: tv,
-            height: height,
-            round: round,
+            height,
+            round,
             step: Step::ProposeWait,
         });
     }
@@ -1717,8 +1720,8 @@ impl Bft {
             if self.step == Step::PrevoteWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: self.params.timer.get_prevote(),
-                    height: height,
-                    round: round,
+                    height,
+                    round,
                     step: Step::PrevoteWait,
                 });
             }
@@ -1728,8 +1731,8 @@ impl Bft {
             if self.step == Step::PrecommitWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: self.params.timer.get_precommit(),
-                    height: height,
-                    round: round,
+                    height,
+                    round,
                     step: Step::PrecommitWait,
                 });
             }

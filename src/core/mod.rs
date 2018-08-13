@@ -27,9 +27,3 @@ pub use self::params::*;
 pub use self::voteset::*;
 
 pub use libproto::blockchain::{Block, BlockBody, BlockHeader, Proof, Status, Transaction};
-
-use types::H256;
-
-pub trait BareHash {
-    fn bare_hash(&self) -> H256;
-}
