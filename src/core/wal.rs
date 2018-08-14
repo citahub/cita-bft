@@ -82,10 +82,10 @@ impl Wal {
         })
     }
 
-    fn get_file_path(dir: &String, height: usize) -> String {
+    fn get_file_path(dir: &str, height: usize) -> String {
         let mut name = height.to_string();
         name += ".log";
-        let pathname = dir.clone() + "/";
+        let pathname = dir.to_string() + "/";
         pathname.clone() + &*name
     }
 

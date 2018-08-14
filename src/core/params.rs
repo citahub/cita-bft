@@ -49,7 +49,7 @@ impl PrivateKey {
 
         let signer = PrivKey::from_str(clean_0x(&buffer)).unwrap();
 
-        PrivateKey { signer: signer }
+        PrivateKey { signer }
     }
 }
 
