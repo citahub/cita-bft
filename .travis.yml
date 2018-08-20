@@ -3,14 +3,29 @@ sudo: required
 cache:
   timeout: 600
   directories:
-  - $HOME/.cargo/git
-  - $HOME/.cargo/registry
+    - $TRAVIS_BUILD_DIR/target
+    - $HOME/.cargo/git
+    - $HOME/.cargo/registry
 services:
   - docker
+git:
+  depth: 1
+install:
+  - bash '.ci-scripts/install-env'
+stages:
+  - Format
+  - Test
 jobs:
   include:
-    - stage: Build
+    - stage: Format
+      script: bash '.ci-scripts/format'
+    - stage: Test
+      name: Test
+      env: CACHE_NAME=Test
       script:
-        - docker pull cita/cita-build:ubuntu-18.04-20180523
-        - bash '.ci-scripts/format'
-        - bash '.ci-scripts/build'
+        - bash '.ci-scripts/test'
+        - bash '.ci-scripts/check-cargolock'
+    - stage: Test
+      name: Clippy
+      env: CACHE_NAME=Clippy
+      script: bash '.ci-scripts/clippy'
