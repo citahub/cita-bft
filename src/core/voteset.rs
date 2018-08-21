@@ -22,7 +22,8 @@ use libproto::blockchain::{Block, Transaction};
 use lru_cache::LruCache;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use types::{Address, H256};
+use std::str::FromStr;
+use types::{clean_0x, Address, H256};
 use util::{Hashable, BLOCKLIMIT};
 
 // height -> round collector
@@ -286,12 +287,21 @@ pub struct Proposal {
     pub lock_votes: Option<VoteSet>,
 }
 
-// verify tx nonce and valid_until_block
+// verify to, tx nonce and valid_until_block
 pub fn verify_tx(tx: &Transaction, height: u64) -> bool {
+    let to = clean_0x(tx.get_to());
+    if !to.is_empty() && Address::from_str(to).is_err() {
+        return false;
+    }
     let nonce = tx.get_nonce();
+    if nonce.len() > 128 {
+        return false;
+    }
     let valid_until_block = tx.get_valid_until_block();
-    (nonce.len() <= 128)
-        && (height <= valid_until_block && valid_until_block < (height + BLOCKLIMIT))
+    if height > valid_until_block || valid_until_block >= (height + BLOCKLIMIT) {
+        return false;
+    }
+    true
 }
 
 impl Proposal {
