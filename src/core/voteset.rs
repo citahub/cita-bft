@@ -45,7 +45,7 @@ impl VoteCollector {
         round: usize,
         step: Step,
         sender: Address,
-        vote: VoteMessage,
+        vote: &VoteMessage,
     ) -> bool {
         if self.votes.contains_key(&height) {
             self.votes
@@ -61,14 +61,9 @@ impl VoteCollector {
     }
 
     pub fn get_voteset(&mut self, height: usize, round: usize, step: Step) -> Option<VoteSet> {
-        if self.votes.contains_key(&height) {
-            self.votes
-                .get_mut(&height)
-                .unwrap()
-                .get_voteset(round, step)
-        } else {
-            None
-        }
+        self.votes
+            .get_mut(&height)
+            .and_then(|rc| rc.get_voteset(round, step))
     }
 }
 
@@ -85,26 +80,24 @@ impl RoundCollector {
         }
     }
 
-    pub fn add(&mut self, round: usize, step: Step, sender: Address, vote: VoteMessage) -> bool {
+    pub fn add(&mut self, round: usize, step: Step, sender: Address, vote: &VoteMessage) -> bool {
         if self.round_votes.contains_key(&round) {
             self.round_votes
                 .get_mut(&round)
                 .unwrap()
-                .add(step, sender, vote)
+                .add(step, sender, &vote)
         } else {
             let mut step_votes = StepCollector::new();
-            step_votes.add(step, sender, vote);
+            step_votes.add(step, sender, &vote);
             self.round_votes.insert(round, step_votes);
             true
         }
     }
 
     pub fn get_voteset(&mut self, round: usize, step: Step) -> Option<VoteSet> {
-        if self.round_votes.contains_key(&round) {
-            self.round_votes.get_mut(&round).unwrap().get_voteset(step)
-        } else {
-            None
-        }
+        self.round_votes
+            .get_mut(&round)
+            .and_then(|sc| sc.get_voteset(step))
     }
 }
 
@@ -121,7 +114,7 @@ impl StepCollector {
         }
     }
 
-    pub fn add(&mut self, step: Step, sender: Address, vote: VoteMessage) -> bool {
+    pub fn add(&mut self, step: Step, sender: Address, vote: &VoteMessage) -> bool {
         self.step_votes
             .entry(step)
             .or_insert_with(VoteSet::new)
@@ -129,11 +122,7 @@ impl StepCollector {
     }
 
     pub fn get_voteset(&self, step: Step) -> Option<VoteSet> {
-        if self.step_votes.contains_key(&step) {
-            Some((&self.step_votes[&step]).clone())
-        } else {
-            None
-        }
+        self.step_votes.get(&step).cloned()
     }
 }
 
@@ -155,21 +144,18 @@ impl VoteSet {
     }
 
     //just add ,not check
-    pub fn add(&mut self, sender: Address, vote: VoteMessage) -> bool {
-        if self.votes_by_sender.contains_key(&sender) {
-            false
-        } else {
+    pub fn add(&mut self, sender: Address, vote: &VoteMessage) -> bool {
+        let mut added = false;
+        self.votes_by_sender.entry(sender).or_insert_with(|| {
+            added = true;
+            vote.to_owned()
+        });
+        if added {
             self.count += 1;
-            let proposal = vote.proposal;
-            self.votes_by_sender.insert(sender, vote);
-
-            let mut hash = H256::default();
-            if let Some(h) = proposal {
-                hash = h;
-            }
+            let hash = vote.proposal.unwrap_or_else(H256::default);
             *self.votes_by_proposal.entry(hash).or_insert(0) += 1;
-            true
         }
+        added
     }
 
     pub fn check(
@@ -186,10 +172,7 @@ impl VoteSet {
                 let signature = &vote.signature;
                 if let Ok(pubkey) = signature.recover(&msg.crypt_hash()) {
                     if pubkey_to_address(&pubkey) == *sender {
-                        let mut hash = H256::default();
-                        if let Some(h) = vote.proposal {
-                            hash = h;
-                        }
+                        let hash = vote.proposal.unwrap_or_else(H256::default);
                         // inc the count of vote for hash
                         *votes_by_proposal.entry(hash).or_insert(0) += 1;
                     }
@@ -242,11 +225,9 @@ impl ProposalCollector {
     }
 
     pub fn get_proposal(&mut self, height: usize, round: usize) -> Option<Proposal> {
-        if self.proposals.contains_key(&height) {
-            self.proposals.get_mut(&height).unwrap().get_proposal(round)
-        } else {
-            None
-        }
+        self.proposals
+            .get_mut(&height)
+            .and_then(|prc| prc.get_proposal(round))
     }
 }
 
@@ -272,11 +253,7 @@ impl ProposalRoundCollector {
     }
 
     pub fn get_proposal(&mut self, round: usize) -> Option<Proposal> {
-        if self.round_proposals.contains_key(&round) {
-            Some(self.round_proposals.get_mut(&round).unwrap().clone())
-        } else {
-            None
-        }
+        self.round_proposals.get_mut(&round).cloned()
     }
 }
 
@@ -316,19 +293,17 @@ impl Proposal {
                 .as_ref()
                 .unwrap()
                 .check(h, round, Step::Prevote, authorities);
-            if ret.is_err() {
-                return false;
-            }
 
-            if let Some(p) = ret.unwrap() {
-                let block = Block::try_from(&self.block).unwrap();
-
-                let hash = block.crypt_hash();
-                if p == hash {
-                    return true;
+            match ret {
+                Ok(Some(p)) => {
+                    if let Ok(block) = Block::try_from(&self.block) {
+                        block.crypt_hash() == p
+                    } else {
+                        false
+                    }
                 }
+                _ => false,
             }
-            false
         }
     }
 }

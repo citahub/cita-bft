@@ -734,7 +734,7 @@ impl Bft {
                 round,
                 step,
                 author.address,
-                VoteMessage {
+                &VoteMessage {
                     proposal: hash,
                     signature,
                 },
@@ -865,7 +865,7 @@ impl Bft {
                             r,
                             step,
                             sender,
-                            VoteMessage {
+                            &VoteMessage {
                                 proposal: hash,
                                 signature,
                             },
@@ -1094,7 +1094,7 @@ impl Bft {
                         for vote in proto_proposal.get_lock_votes() {
                             vote_set.add(
                                 Address::from_slice(vote.get_sender()),
-                                VoteMessage {
+                                &VoteMessage {
                                     proposal: Some(H256::from_slice(vote.get_proposal())),
                                     signature: Signature::from(vote.get_signature()),
                                 },
@@ -1534,80 +1534,85 @@ impl Bft {
                     }
                 }
                 routing_key!(Snapshot >> SnapshotReq) => {
-                    let req = msg.take_snapshot_req().unwrap();
-                    let mut resp = SnapshotResp::new();
-                    let mut send = false;
-                    match req.cmd {
-                        Cmd::Snapshot => {
-                            info!("[snapshot] receive cmd: Snapshot");
-                        }
-                        Cmd::Begin => {
-                            info!("[snapshot] receive cmd: Begin");
-                            self.set_snapshot(true);
-                            self.is_cleared = false;
-
-                            resp.set_resp(Resp::BeginAck);
-                            resp.set_flag(true);
-                            send = true;
-                        }
-                        Cmd::Restore => {
-                            info!("[snapshot] receive cmd: Restore");
-                        }
-                        Cmd::Clear => {
-                            info!("[snapshot] receive cmd: Clear");
-                            let walpath = DataPath::wal_path();
-                            let tmp_path = DataPath::root_node_path() + "/wal_tmp";
-                            self.wal_log = Wal::new(&*tmp_path).unwrap();
-                            let _ = fs::remove_dir_all(&walpath);
-                            self.wal_log = Wal::new(&*walpath).unwrap();
-                            let _ = fs::remove_dir_all(&tmp_path);
-
-                            self.is_cleared = true;
-
-                            resp.set_resp(Resp::ClearAck);
-                            resp.set_flag(true);
-                            send = true;
-                        }
-                        Cmd::End => {
-                            info!("[snapshot] receive cmd: End");
-                            if self.is_cleared {
-                                self.consensus_power = false;
-                                self.clean_verified_info(0);
-                                self.clean_saved_info();
-                                self.clean_filter_info();
-                                self.block_txs.clear();
-                                self.proposals.proposals.clear();
-                                self.votes.votes.clear();
-                                self.proof = BftProof::from(req.get_proof().clone());
-                                self.pre_hash = None;
-                                self.block_proof = None;
-                                self.height = req.end_height as usize;
-                                self.round = 0;
-                                self.step = Step::PrecommitAuth;
-                                let hi = self.height;
-                                self.save_wal_proof(hi);
-                            }
-
-                            self.set_snapshot(false);
-                            self.is_cleared = false;
-
-                            resp.set_resp(Resp::EndAck);
-                            resp.set_flag(true);
-                            send = true;
-                        }
-                    }
-
-                    if send {
-                        let msg: Message = resp.into();
-                        self.pub_sender
-                            .send((
-                                routing_key!(Consensus >> SnapshotResp).into(),
-                                (&msg).try_into().unwrap(),
-                            ))
-                            .unwrap();
-                    }
+                    self.process_snapshot(msg);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn process_snapshot(&mut self, mut msg: Message) {
+        if let Some(req) = msg.take_snapshot_req() {
+            let mut resp = SnapshotResp::new();
+            let mut send = false;
+            match req.cmd {
+                Cmd::Snapshot => {
+                    info!("[snapshot] receive cmd: Snapshot");
+                }
+                Cmd::Begin => {
+                    info!("[snapshot] receive cmd: Begin");
+                    self.set_snapshot(true);
+                    self.is_cleared = false;
+
+                    resp.set_resp(Resp::BeginAck);
+                    resp.set_flag(true);
+                    send = true;
+                }
+                Cmd::Restore => {
+                    info!("[snapshot] receive cmd: Restore");
+                }
+                Cmd::Clear => {
+                    info!("[snapshot] receive cmd: Clear");
+                    let walpath = DataPath::wal_path();
+                    let tmp_path = DataPath::root_node_path() + "/wal_tmp";
+                    self.wal_log = Wal::new(&*tmp_path).unwrap();
+                    let _ = fs::remove_dir_all(&walpath);
+                    self.wal_log = Wal::new(&*walpath).unwrap();
+                    let _ = fs::remove_dir_all(&tmp_path);
+
+                    self.is_cleared = true;
+
+                    resp.set_resp(Resp::ClearAck);
+                    resp.set_flag(true);
+                    send = true;
+                }
+                Cmd::End => {
+                    info!("[snapshot] receive cmd: End");
+                    if self.is_cleared {
+                        self.consensus_power = false;
+                        self.clean_verified_info(0);
+                        self.clean_saved_info();
+                        self.clean_filter_info();
+                        self.block_txs.clear();
+                        self.proposals.proposals.clear();
+                        self.votes.votes.clear();
+                        self.proof = BftProof::from(req.get_proof().clone());
+                        self.pre_hash = None;
+                        self.block_proof = None;
+                        self.height = req.end_height as usize;
+                        self.round = 0;
+                        self.step = Step::PrecommitAuth;
+                        let hi = self.height;
+                        self.save_wal_proof(hi);
+                    }
+
+                    self.set_snapshot(false);
+                    self.is_cleared = false;
+
+                    resp.set_resp(Resp::EndAck);
+                    resp.set_flag(true);
+                    send = true;
+                }
+            }
+
+            if send {
+                let msg: Message = resp.into();
+                self.pub_sender
+                    .send((
+                        routing_key!(Consensus >> SnapshotResp).into(),
+                        (&msg).try_into().unwrap(),
+                    ))
+                    .unwrap();
             }
         }
     }
@@ -1758,57 +1763,66 @@ impl Bft {
         }
     }
 
-    // the function has a cyclomatic complexity of 29
     pub fn start(&mut self) {
         let vec_buf = self.wal_log.load();
         for (mtype, vec_out) in vec_buf {
             trace!("******* wal_log type {}", mtype);
-            if mtype == LOG_TYPE_PROPOSE {
-                let res = self.handle_proposal(&vec_out[..], false, true);
-                if let Ok((h, r)) = res {
-                    let pres = self.proc_proposal(h, r);
-                    if !pres {
-                        trace!("in start proc_proposal res false height {} round {}", h, r);
+            // TODO change mtype to enum
+            match mtype {
+                LOG_TYPE_PROPOSE => {
+                    let res = self.handle_proposal(&vec_out[..], false, true);
+                    if let Ok((h, r)) = res {
+                        let pres = self.proc_proposal(h, r);
+                        if !pres {
+                            trace!("in start proc_proposal res false height {} round {}", h, r);
+                        }
                     }
                 }
-            } else if mtype == LOG_TYPE_VOTE {
-                let res = self.handle_message(&vec_out[..], false);
-                if let Ok((h, r, s)) = res {
-                    if s == Step::Prevote {
-                        self.proc_prevote(h, r);
-                    } else {
-                        self.proc_precommit(h, r);
+                LOG_TYPE_VOTE => {
+                    let res = self.handle_message(&vec_out[..], false);
+                    if let Ok((h, r, s)) = res {
+                        if s == Step::Prevote {
+                            self.proc_prevote(h, r);
+                        } else {
+                            self.proc_precommit(h, r);
+                        }
                     }
                 }
-            } else if mtype == LOG_TYPE_STATE {
-                self.handle_state(&vec_out[..]);
-            } else if mtype == LOG_TYPE_PREV_HASH {
-                let pre_hash = H256::from_slice(&vec_out);
-                self.pre_hash = Some(pre_hash);
-            } else if mtype == LOG_TYPE_COMMITS {
-                trace!(" wal proof begining!");
-                if let Ok(proof) = deserialize(&vec_out) {
-                    trace!(" wal proof here {:?}", proof);
-                    self.proof = proof;
+                LOG_TYPE_STATE => {
+                    self.handle_state(&vec_out[..]);
                 }
-            } else if mtype == LOG_TYPE_VERIFIED_PROPOSE {
-                trace!(" LOG_TYPE_VERIFIED_PROPOSE begining!");
-                if let Ok(decode) = deserialize(&vec_out) {
-                    let (vheight, vround, verified): (usize, usize, i8) = decode;
-                    if verified == VERIFIED_PROPOSAL_OK {
-                        self.unverified_msg.remove(&(vheight, vround));
-                    } else {
-                        self.clean_saved_info();
+                LOG_TYPE_PREV_HASH => {
+                    let pre_hash = H256::from_slice(&vec_out);
+                    self.pre_hash = Some(pre_hash);
+                }
+                LOG_TYPE_COMMITS => {
+                    trace!(" wal proof begining!");
+                    if let Ok(proof) = deserialize(&vec_out) {
+                        trace!(" wal proof here {:?}", proof);
+                        self.proof = proof;
                     }
                 }
-            } else if mtype == LOG_TYPE_AUTH_TXS {
-                trace!(" LOG_TYPE_AUTH_TXS begining!");
-                let blocktxs = BlockTxs::try_from(&vec_out);
-                if let Ok(blocktxs) = blocktxs {
-                    let height = blocktxs.get_height() as usize;
-                    trace!(" LOG_TYPE_AUTH_TXS add height {}!", height);
-                    self.block_txs.push_back((height, blocktxs));
+                LOG_TYPE_VERIFIED_PROPOSE => {
+                    trace!(" LOG_TYPE_VERIFIED_PROPOSE begining!");
+                    if let Ok(decode) = deserialize(&vec_out) {
+                        let (vheight, vround, verified): (usize, usize, i8) = decode;
+                        if verified == VERIFIED_PROPOSAL_OK {
+                            self.unverified_msg.remove(&(vheight, vround));
+                        } else {
+                            self.clean_saved_info();
+                        }
+                    }
                 }
+                LOG_TYPE_AUTH_TXS => {
+                    trace!(" LOG_TYPE_AUTH_TXS begining!");
+                    let blocktxs = BlockTxs::try_from(&vec_out);
+                    if let Ok(blocktxs) = blocktxs {
+                        let height = blocktxs.get_height() as usize;
+                        trace!(" LOG_TYPE_AUTH_TXS add height {}!", height);
+                        self.block_txs.push_back((height, blocktxs));
+                    }
+                }
+                _ => {}
             }
         }
         // TODO : broadcast some message, based on current state
