@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+set -xe
+
+SCRIPT_PATH=`readlink -f $0`
+source "$(dirname "${SCRIPT_PATH}")/library"
+
+if [ $(git status --short Cargo.lock | wc -l) -ne 0 ]; then
+    echo "[Error] Please update Cargo.lock BEFORE commit."
+    git diff Cargo.lock
+    exit 1
+fi
