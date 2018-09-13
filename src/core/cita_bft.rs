@@ -1593,6 +1593,7 @@ impl Bft {
                         self.round = 0;
                         self.step = Step::PrecommitAuth;
                         let hi = self.height;
+                        let _ = self.wal_log.set_height(hi);
                         self.save_wal_proof(hi);
                     }
 
@@ -1800,6 +1801,11 @@ impl Bft {
                     if let Ok(proof) = deserialize(&vec_out) {
                         trace!(" wal proof here {:?}", proof);
                         self.proof = proof;
+
+                        if self.height < self.wal_log.current_height {
+                            info!("change height.");
+                            self.height = self.wal_log.current_height;
+                        }
                     }
                 }
                 LOG_TYPE_VERIFIED_PROPOSE => {

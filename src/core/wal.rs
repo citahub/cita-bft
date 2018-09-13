@@ -26,7 +26,7 @@ const DELETE_FILE_INTERVAL: usize = 3;
 pub struct Wal {
     height_fs: BTreeMap<usize, File>,
     dir: String,
-    current_height: usize,
+    pub current_height: usize,
     ifile: File,
 }
 
