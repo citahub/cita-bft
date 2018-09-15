@@ -1589,11 +1589,13 @@ impl Bft {
                         self.proof = BftProof::from(req.get_proof().clone());
                         self.pre_hash = None;
                         self.block_proof = None;
-                        self.height = req.end_height as usize;
-                        self.round = 0;
-                        self.step = Step::PrecommitAuth;
-                        let hi = self.height;
-                        self.save_wal_proof(hi);
+                        self.change_state_step(
+                            req.end_height as usize,
+                            0,
+                            Step::PrecommitAuth,
+                            true,
+                        );
+                        self.save_wal_proof(req.end_height as usize);
                     }
 
                     self.set_snapshot(false);
