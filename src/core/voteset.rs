@@ -264,6 +264,13 @@ pub struct Proposal {
     pub lock_votes: Option<VoteSet>,
 }
 
+pub fn verify_tx_version(tx: &Transaction, version: u32) -> bool {
+    if tx.get_version() != version {
+        return false;
+    }
+    true
+}
+
 // verify to, tx nonce and valid_until_block
 pub fn verify_tx(tx: &Transaction, height: u64) -> bool {
     let to = clean_0x(tx.get_to());
@@ -278,6 +285,7 @@ pub fn verify_tx(tx: &Transaction, height: u64) -> bool {
     if height > valid_until_block || valid_until_block >= (height + BLOCKLIMIT) {
         return false;
     }
+
     true
 }
 
