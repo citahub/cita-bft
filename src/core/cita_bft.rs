@@ -21,7 +21,9 @@ use authority_manage::AuthorityManage;
 use bincode::{deserialize, serialize, Infinite};
 
 use core::params::BftParams;
-use core::voteset::{verify_tx, Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet};
+use core::voteset::{
+    verify_tx, verify_tx_version, Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet,
+};
 
 use core::votetime::TimeoutInfo;
 use core::wal::Wal;
@@ -146,6 +148,8 @@ pub struct Bft {
 
     // whether the datas above have been cleared.
     is_cleared: bool,
+
+    version: Option<u32>,
 }
 
 impl Bft {
@@ -188,6 +192,7 @@ impl Bft {
             block_proof: None,
             is_snapshot: false,
             is_cleared: false,
+            version: None,
         }
     }
 
@@ -921,6 +926,14 @@ impl Bft {
                     }
                 }
 
+                if !self.verify_version(&block) {
+                    warn!(
+                        "proc proposal version error height {} round {} self height {} round {}",
+                        height, round, self.height, self.round
+                    );
+                    return false;
+                }
+
                 //proof : self.params vs proposal's block's broof
                 let block_proof = block.get_header().get_proof();
                 let proof = BftProof::from(block_proof.clone());
@@ -983,9 +996,48 @@ impl Bft {
         false
     }
 
+    fn verify_version(&self, block: &Block) -> bool {
+        if self.version.is_none() {
+            warn!(
+                "in verify_version,self.version is none: height {}, round {}",
+                self.height, self.round
+            );
+            return false;
+        }
+        let version = self.version.unwrap();
+        if block.get_version() != version {
+            warn!(
+                "verify block version failed, block version: {}, current chain version: {}",
+                block.get_version(),
+                version
+            );
+            return false;
+        }
+        let transactions = block.get_body().get_transactions();
+        let len = transactions.len();
+        if len == 0 {
+            return true;
+        }
+        transactions.into_iter().all(|tx| {
+            let result = verify_tx_version(tx.get_transaction(), version);
+            if !result {
+                let raw_tx = tx.get_transaction();
+                warn!(
+                    "verify tx version failed, tx version: {}, current chain version: {}",
+                    raw_tx.get_version(),
+                    version
+                );
+            }
+            result
+        })
+    }
+
     fn verify_req(&mut self, block: &Block, vheight: usize, vround: usize) -> bool {
         let transactions = block.get_body().get_transactions();
         let len = transactions.len();
+        if len == 0 {
+            return true;
+        }
         let verify_ok = block.check_hash() && transactions.into_iter().all(|tx| {
             let result = verify_tx(tx.get_transaction(), vheight as u64);
             if !result {
@@ -999,7 +1051,7 @@ impl Bft {
             }
             result
         });
-        if (len > 0) && verify_ok {
+        if verify_ok {
             let reqid = gen_reqid_from_idx(vheight as u64, vround as u64);
             let verify_req = block.block_verify_req(reqid);
             trace!(
@@ -1184,8 +1236,18 @@ impl Bft {
             );
             self.proposals.add(self.height, self.round, proposal);
         } else {
+            if self.version.is_none() {
+                warn!(
+                    "in new_proposal,self.version is none: height {}, round {}",
+                    self.height, self.round
+                );
+                return;
+            }
+            let version = self.version.unwrap();
             // proposal new blk
             let mut block = Block::new();
+            block.set_version(version);
+
             let mut flag = false;
 
             for &(ref height, ref blocktxs) in &self.block_txs {
@@ -1452,6 +1514,9 @@ impl Bft {
                     }
                     self.auth_manage
                         .receive_authorities_list(self.height, authorities);
+                    let version = rich_status.get_version();
+                    trace!("verison: {}", version);
+                    self.version = Some(version);
                 }
 
                 routing_key!(Auth >> VerifyBlockResp) => {
