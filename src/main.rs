@@ -46,6 +46,7 @@
 
 #![feature(mpsc_select)]
 #![feature(try_from)]
+#![feature(tool_lints)]
 
 extern crate authority_manage;
 extern crate bincode;
