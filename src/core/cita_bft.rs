@@ -339,15 +339,15 @@ impl Bft {
         let vote_set = self.votes.get_voteset(height, round, Step::Prevote);
         trace!("proc_prevote vote_set {:?}", vote_set);
         if let Some(vote_set) = vote_set {
-            if self.is_above_threshold(&vote_set.count) {
-                let mut tv = if self.is_all_vote(&vote_set.count) {
+            if self.is_above_threshold(vote_set.count) {
+                let mut tv = if self.is_all_vote(vote_set.count) {
                     Duration::new(0, 0)
                 } else {
                     self.params.timer.get_prevote()
                 };
 
                 for (hash, count) in &vote_set.votes_by_proposal {
-                    if self.is_above_threshold(count) {
+                    if self.is_above_threshold(*count) {
                         //we have lock block,and now polc  then unlock
                         if self.lock_round.is_some()
                             && self.lock_round.unwrap() < round
@@ -405,12 +405,12 @@ impl Bft {
         false
     }
 
-    fn is_above_threshold(&self, n: &usize) -> bool {
-        *n * 3 > self.auth_manage.authority_n * 2
+    fn is_above_threshold(&self, n: usize) -> bool {
+        n * 3 > self.auth_manage.authority_n * 2
     }
 
-    fn is_all_vote(&self, n: &usize) -> bool {
-        *n == self.auth_manage.authority_n
+    fn is_all_vote(&self, n: usize) -> bool {
+        n == self.auth_manage.authority_n
     }
 
     fn get_proposal_verified_result(&self, height: usize, round: usize) -> i8 {
@@ -481,21 +481,21 @@ impl Bft {
             vote_set
         );
         if let Some(vote_set) = vote_set {
-            if self.is_above_threshold(&vote_set.count) {
+            if self.is_above_threshold(vote_set.count) {
                 trace!(
                     "proc_precommit is_above_threshold height {} round {}",
                     height,
                     round
                 );
 
-                let mut tv = if self.is_all_vote(&vote_set.count) {
+                let mut tv = if self.is_all_vote(vote_set.count) {
                     Duration::new(0, 0)
                 } else {
                     self.params.timer.get_precommit()
                 };
 
                 for (hash, count) in vote_set.votes_by_proposal {
-                    if self.is_above_threshold(&count) {
+                    if self.is_above_threshold(count) {
                         trace!(
                             "proc_precommit is_above_threshold hash {:?} {}",
                             hash,
@@ -631,7 +631,7 @@ impl Bft {
                     }
                 }
             }
-            if !self.is_above_threshold(&num) {
+            if !self.is_above_threshold(num) {
                 return None;
             }
         }
@@ -1296,7 +1296,7 @@ impl Bft {
 
             let block_time = unix_now();
             let transactions_root = block.get_body().transactions_root();
-            block.mut_header().set_timestamp(block_time.as_millis());
+            block.mut_header().set_timestamp(AsMillis::as_millis(&block_time));
             block.mut_header().set_height(self.height as u64);
             block
                 .mut_header()
