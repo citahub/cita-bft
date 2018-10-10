@@ -825,7 +825,8 @@ impl Bft {
                                 if r < self.round {
                                     trans_flag = true;
                                 }
-                            } else if fround == r && step == fstep
+                            } else if fround == r
+                                && step == fstep
                                 && now - ins
                                     > self.params.timer.get_prevote()
                                         * TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE
@@ -1102,7 +1103,8 @@ impl Bft {
             if let Ok(pubkey) = signature.recover(&message.crypt_hash()) {
                 let height = proto_proposal.get_height() as usize;
                 let round = proto_proposal.get_round() as usize;
-                if height < self.height || (height == self.height && round < self.round)
+                if height < self.height
+                    || (height == self.height && round < self.round)
                     || (height == self.height
                         && round == self.round
                         && self.step > Step::ProposeWait)
@@ -1296,7 +1298,9 @@ impl Bft {
 
             let block_time = unix_now();
             let transactions_root = block.get_body().transactions_root();
-            block.mut_header().set_timestamp(AsMillis::as_millis(&block_time));
+            block
+                .mut_header()
+                .set_timestamp(AsMillis::as_millis(&block_time));
             block.mut_header().set_height(self.height as u64);
             block
                 .mut_header()
@@ -1586,7 +1590,8 @@ impl Bft {
                     if now_height == height + 1
                         && self
                             .is_round_proposer(now_height, now_round, &self.params.signer.address)
-                            .is_ok() && now_step == Step::ProposeWait
+                            .is_ok()
+                        && now_step == Step::ProposeWait
                         && self.proposal.is_none()
                     {
                         self.new_proposal();
@@ -1822,11 +1827,11 @@ impl Bft {
             }
         } else if self.step == Step::CommitWait {
             /*self.timer_seter.send(
-                    TimeoutInfo{
-                        timeval:self.params.timer.get_commit(),
-                        height:height,
-                        round:round,
-                        step:Step::CommitWait});*/
+            TimeoutInfo{
+                timeval:self.params.timer.get_commit(),
+                height:height,
+                round:round,
+                step:Step::CommitWait});*/
         }
     }
 
