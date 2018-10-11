@@ -273,10 +273,31 @@ pub fn verify_tx_version(tx: &Transaction, version: u32) -> bool {
 
 // verify to, tx nonce and valid_until_block
 pub fn verify_tx(tx: &Transaction, height: u64) -> bool {
-    let to = clean_0x(tx.get_to());
-    if !to.is_empty() && Address::from_str(to).is_err() {
+    let version = tx.get_version();
+    if version == 0 {
+        // new to must be empty
+        if !tx.get_to_v1().is_empty() {
+            return false;
+        }
+        let to = clean_0x(tx.get_to());
+        if !to.is_empty() && Address::from_str(to).is_err() {
+            return false;
+        }
+    } else if version == 1 {
+        // old to must be empty
+        if !tx.get_to().is_empty() {
+            return false;
+        }
+        // check to_v1
+        let to = tx.get_to_v1();
+        if !to.is_empty() && to.len() != 20 {
+            return false;
+        }
+    } else {
+        error!("unexpected version {}!", version);
         return false;
     }
+
     let nonce = tx.get_nonce();
     if nonce.len() > 128 {
         return false;
