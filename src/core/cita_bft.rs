@@ -212,15 +212,18 @@ impl Bft {
     ) -> Result<(), EngineError> {
         //let ref p = self.params;
         let p = &self.auth_manage;
-        if p.authority_n == 0 {
+        if p.authorities.is_empty() {
             warn!("There are no authorities");
             return Err(EngineError::NotAuthorized(Address::zero()));
         }
         let proposer_nonce = height + round;
-        let proposer: &Address = p.authorities.get(proposer_nonce % p.authority_n).expect(
-            "There are authority_n authorities; \
-             taking number modulo authority_n gives number in authority_n range; qed",
-        );
+        let proposer: &Address = p
+            .authorities
+            .get(proposer_nonce % p.authorities.len())
+            .expect(
+                "There are validator_n() authorities; \
+                 taking number modulo validator_n() gives number in validator_n() range; qed",
+            );
         if proposer == address {
             Ok(())
         } else {
@@ -406,11 +409,11 @@ impl Bft {
     }
 
     fn is_above_threshold(&self, n: usize) -> bool {
-        n * 3 > self.auth_manage.authority_n * 2
+        n * 3 > self.auth_manage.validator_n() * 2
     }
 
     fn is_all_vote(&self, n: usize) -> bool {
-        n == self.auth_manage.authority_n
+        n == self.auth_manage.validator_n()
     }
 
     fn get_proposal_verified_result(&self, height: usize, round: usize) -> i8 {
@@ -751,9 +754,9 @@ impl Bft {
         }
     }
 
-    fn is_authority(&self, address: &Address) -> bool {
+    fn is_validator(&self, address: &Address) -> bool {
         //self.params.authorities.contains(address.into())
-        self.auth_manage.authorities.contains(address)
+        self.auth_manage.validators.contains(address)
     }
 
     fn change_state_step(&mut self, height: usize, round: usize, s: Step, newflag: bool) {
@@ -809,7 +812,7 @@ impl Bft {
                     return Err(EngineError::UnexpectedMessage);
                 }
 
-                if self.is_authority(&sender) && pubkey_to_address(&pubkey) == sender {
+                if self.is_validator(&sender) && pubkey_to_address(&pubkey) == sender {
                     let mut trans_flag = false;
                     let mut add_flag = false;
                     let now = Instant::now();
@@ -904,7 +907,7 @@ impl Bft {
                 self.height,
                 self.round
             );
-            if !proposal.check(height, &self.auth_manage.authorities) {
+            if !proposal.check(height, &self.auth_manage.validators) {
                 warn!("proc proposal check authorities error");
                 return false;
             }
@@ -940,10 +943,10 @@ impl Bft {
                 let proof = BftProof::from(block_proof.clone());
                 debug!(" proof is {:?}  {} {}", proof, height, round);
                 if self.auth_manage.authority_h_old == height - 1 {
-                    if !proof.check(height - 1, &self.auth_manage.authorities_old) {
+                    if !proof.check(height - 1, &self.auth_manage.validators_old) {
                         return false;
                     }
-                } else if !proof.check(height - 1, &self.auth_manage.authorities) {
+                } else if !proof.check(height - 1, &self.auth_manage.validators) {
                     return false;
                 }
 
@@ -1507,7 +1510,15 @@ impl Bft {
                         .map(|node| Address::from_slice(node))
                         .collect();
                     trace!("authorities: [{:?}]", authorities);
-                    if authorities.contains(&self.params.signer.address) {
+
+                    let validators: Vec<Address> = rich_status
+                        .get_validators()
+                        .into_iter()
+                        .map(|node| Address::from_slice(node))
+                        .collect();
+                    trace!("validators: [{:?}]", validators);
+
+                    if validators.contains(&self.params.signer.address) {
                         self.consensus_power = true;
                     } else {
                         info!(
@@ -1517,7 +1528,7 @@ impl Bft {
                         self.consensus_power = false;
                     }
                     self.auth_manage
-                        .receive_authorities_list(self.height, authorities);
+                        .receive_authorities_list(self.height, authorities, validators);
                     let version = rich_status.get_version();
                     trace!("verison: {}", version);
                     self.version = Some(version);
