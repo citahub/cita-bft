@@ -319,8 +319,9 @@ impl Bft {
             self.pub_and_broadcast_message(height, round, Step::Prevote, Some(H256::default()));
         }
         //this is for timeout resending votes
+        let now = Instant::now();
         let _ = self.timer_seter.send(TimeoutInfo {
-            timeval: self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE,
+            timeval: now + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
             height,
             round,
             step: Step::Prevote,
@@ -395,8 +396,9 @@ impl Bft {
 
                 if self.step == Step::Prevote {
                     self.change_state_step(height, round, Step::PrevoteWait, false);
+                    let now = Instant::now();
                     let _ = self.timer_seter.send(TimeoutInfo {
-                        timeval: tv,
+                        timeval: now + tv,
                         height,
                         round,
                         step: Step::PrevoteWait,
@@ -450,9 +452,10 @@ impl Bft {
             self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
         }
 
+        let now = Instant::now();
         //timeout for resending vote msg
         let _ = self.timer_seter.send(TimeoutInfo {
-            timeval: self.params.timer.get_precommit() * TIMEOUT_RETRANSE_MULTIPLE,
+            timeval: now + (self.params.timer.get_precommit() * TIMEOUT_RETRANSE_MULTIPLE),
             height: self.height,
             round: self.round,
             step: Step::Precommit,
@@ -531,8 +534,9 @@ impl Bft {
 
                 if self.step == Step::Precommit {
                     self.change_state_step(height, round, Step::PrecommitWait, false);
+                    let now = Instant::now();
                     let _ = self.timer_seter.send(TimeoutInfo {
-                        timeval: tv,
+                        timeval: now + tv,
                         height,
                         round,
                         step: Step::PrecommitWait,
@@ -1395,8 +1399,9 @@ impl Bft {
                 self.proc_precommit(tminfo.height, tminfo.round);
             } else {
                 self.change_state_step(tminfo.height, tminfo.round, Step::PrecommitAuth, false);
+                let now = Instant::now();
                 let _ = self.timer_seter.send(TimeoutInfo {
-                    timeval: self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE,
+                    timeval: now + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
                     height: tminfo.height,
                     round: tminfo.round,
                     step: Step::PrecommitAuth,
@@ -1471,8 +1476,9 @@ impl Bft {
                         );
                         if h == self.height && r == self.round && self.step < Step::Prevote {
                             self.step = Step::ProposeWait;
+                            let now = Instant::now();
                             let _ = self.timer_seter.send(TimeoutInfo {
-                                timeval: Duration::new(0, 0),
+                                timeval: now + Duration::new(0, 0),
                                 height: h,
                                 round: r,
                                 step: Step::ProposeWait,
@@ -1606,8 +1612,9 @@ impl Bft {
                         && self.proposal.is_none()
                     {
                         self.new_proposal();
+                        let now = Instant::now();
                         let _ = self.timer_seter.send(TimeoutInfo {
-                            timeval: Duration::new(0, 0),
+                            timeval: now + Duration::new(0, 0),
                             height: now_height,
                             round: now_round,
                             step: Step::ProposeWait,
@@ -1765,8 +1772,9 @@ impl Bft {
             "get new chain status height {} round {} cost time {:?} ",
             status_height, self.round, cost_time
         );
+        let now = Instant::now();
         let _ = self.timer_seter.send(TimeoutInfo {
-            timeval: tv,
+            timeval: now + tv,
             height: status_height,
             round: r,
             step: Step::CommitWait,
@@ -1786,8 +1794,9 @@ impl Bft {
         }
         //if is proposal,enter prevote stage immedietly
         self.step = Step::ProposeWait;
+        let now = Instant::now();
         let _ = self.timer_seter.send(TimeoutInfo {
-            timeval: tv,
+            timeval: now + tv,
             height,
             round,
             step: Step::ProposeWait,
@@ -1804,10 +1813,10 @@ impl Bft {
         } else if self.step == Step::Prevote || self.step == Step::PrevoteWait {
             self.pre_proc_prevote();
             self.proc_prevote(height, round);
-
+            let now = Instant::now();
             if self.step == Step::PrevoteWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
-                    timeval: self.params.timer.get_prevote(),
+                    timeval: now + self.params.timer.get_prevote(),
                     height,
                     round,
                     step: Step::PrevoteWait,
@@ -1816,9 +1825,10 @@ impl Bft {
         } else if self.step == Step::Precommit || self.step == Step::PrecommitWait {
             self.pre_proc_precommit();
             self.proc_precommit(height, round);
+            let now = Instant::now();
             if self.step == Step::PrecommitWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
-                    timeval: self.params.timer.get_precommit(),
+                    timeval: now + self.params.timer.get_precommit(),
                     height,
                     round,
                     step: Step::PrecommitWait,

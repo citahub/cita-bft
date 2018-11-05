@@ -56,6 +56,7 @@ extern crate clap;
 extern crate cpuprofiler;
 extern crate dotenv;
 extern crate engine;
+extern crate min_max_heap;
 #[macro_use]
 extern crate libproto;
 #[macro_use]
