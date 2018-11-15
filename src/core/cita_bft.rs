@@ -34,7 +34,7 @@ use libproto::blockchain::{Block, BlockTxs, BlockWithProof, RichStatus};
 use libproto::consensus::{Proposal as ProtoProposal, SignedProposal, Vote as ProtoVote};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
-use libproto::{auth, Message};
+use libproto::{auth, Message, Origin};
 use proof::BftProof;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
@@ -282,8 +282,8 @@ impl Bft {
         signed_proposal.set_proposal(proto_proposal);
         signed_proposal.set_signature(signature.to_vec());
 
-        let bmsg: Vec<u8> = (&signed_proposal).try_into().unwrap();
         let msg: Message = signed_proposal.into();
+        let bmsg: Vec<u8> = (&msg).try_into().unwrap();
         self.pub_sender
             .send((
                 routing_key!(Consensus >> SignedProposal).into(),
@@ -1032,7 +1032,7 @@ impl Bft {
         })
     }
 
-    fn verify_req(&mut self, block: &Block, vheight: usize, vround: usize) -> bool {
+    fn verify_req(&mut self, origin: Origin, block: &Block, vheight: usize, vround: usize) -> bool {
         let transactions = block.get_body().get_transactions();
         let len = transactions.len();
         if len == 0 {
@@ -1061,7 +1061,8 @@ impl Bft {
                 vheight,
                 vround
             );
-            let msg: Message = verify_req.into();
+            let mut msg: Message = verify_req.into();
+            msg.set_origin(origin);
             self.pub_sender
                 .send((
                     routing_key!(Consensus >> VerifyBlockReq).into(),
@@ -1076,11 +1077,10 @@ impl Bft {
 
     fn handle_proposal(
         &mut self,
-        msg: &[u8],
+        body: &[u8],
         wal_flag: bool,
         need_verify: bool,
     ) -> Result<(usize, usize), EngineError> {
-        let signed_proposal = SignedProposal::try_from(msg);
         trace!(
             "handle proposal here self height {} round {} step {:?} wal_flag {}, need_verify {}",
             self.height,
@@ -1089,7 +1089,10 @@ impl Bft {
             wal_flag,
             need_verify
         );
-        if let Ok(signed_proposal) = signed_proposal {
+        if let Some((signed_proposal, origin)) = Message::try_from(body)
+            .ok()
+            .and_then(|ref mut msg| msg.take_signed_proposal().map(|p| (p, msg.get_origin())))
+        {
             let signature = signed_proposal.get_signature();
             if signature.len() != SIGNATURE_BYTES_LEN {
                 return Err(EngineError::InvalidSignature);
@@ -1123,7 +1126,7 @@ impl Bft {
                     pubkey_to_address(&pubkey)
                 );
 
-                if need_verify && !self.verify_req(&block, height, round) {
+                if need_verify && !self.verify_req(origin, &block, height, round) {
                     warn!("handle_proposal verify_req is error");
                     return Err(EngineError::InvalidTxInProposal);
                 }
@@ -1136,7 +1139,7 @@ impl Bft {
 
                 if (height == self.height && round >= self.round) || height > self.height {
                     if wal_flag {
-                        self.wal_log.save(height, LOG_TYPE_PROPOSE, msg).unwrap();
+                        self.wal_log.save(height, LOG_TYPE_PROPOSE, body).unwrap();
                     }
                     debug!("add proposal height {} round {}!", height, round);
                     let blk = block.try_into().unwrap();
@@ -1208,7 +1211,7 @@ impl Bft {
     }
 
     pub fn new_proposal(&mut self) {
-        if let Some(lock_round) = self.lock_round {
+        let proposal = if let Some(lock_round) = self.lock_round {
             let lock_blk = &self.locked_block;
             let lock_vote = &self.locked_vote;
             let lock_blk = lock_blk.clone().unwrap();
@@ -1221,21 +1224,16 @@ impl Bft {
                 self.proposal = Some(lock_blk_hash);
             }
             let blk = lock_blk.try_into().unwrap();
-            let proposal = Proposal {
-                block: blk,
-                lock_round: Some(lock_round),
-                lock_votes: lock_vote.clone(),
-            };
-            let bmsg = self.pub_proposal(&proposal);
-            self.wal_log
-                .save(self.height, LOG_TYPE_PROPOSE, &bmsg)
-                .unwrap();
             trace!(
                 "pub_proposal proposer vote locked block: height {}, round {}",
                 self.height,
                 self.round
             );
-            self.proposals.add(self.height, self.round, proposal);
+            Proposal {
+                block: blk,
+                lock_round: Some(lock_round),
+                lock_votes: lock_vote.clone(),
+            }
         } else {
             if self.version.is_none() {
                 warn!(
@@ -1317,18 +1315,18 @@ impl Bft {
                 self.locked_block = Some(block.clone());
             }
             let blk = block.try_into().unwrap();
-            let proposal = Proposal {
+            trace!("pub proposal proposor vote myslef in not locked");
+            Proposal {
                 block: blk,
                 lock_round: None,
                 lock_votes: None,
-            };
-            let bmsg = self.pub_proposal(&proposal);
-            self.wal_log
-                .save(self.height, LOG_TYPE_PROPOSE, &bmsg)
-                .unwrap();
-            trace!("pub proposal proposor vote myslef in not locked");
-            self.proposals.add(self.height, self.round, proposal);
-        }
+            }
+        };
+        let bmsg = self.pub_proposal(&proposal);
+        self.wal_log
+            .save(self.height, LOG_TYPE_PROPOSE, &bmsg)
+            .unwrap();
+        self.proposals.add(self.height, self.round, proposal);
     }
 
     pub fn timeout_process(&mut self, tminfo: &TimeoutInfo) {
@@ -1448,15 +1446,13 @@ impl Bft {
     pub fn process(&mut self, info: TransType) {
         let (key, body) = info;
         let rtkey = RoutingKey::from(&key);
-        let mut msg = Message::try_from(body).unwrap();
+        let mut msg = Message::try_from(&body[..]).unwrap();
         let from_broadcast = rtkey.is_sub_module(SubModules::Net);
         let snapshot = !self.get_snapshot();
         if from_broadcast && self.consensus_power && snapshot {
             match rtkey {
                 routing_key!(Net >> SignedProposal) => {
-                    let signed_proposal = msg.take_signed_proposal().unwrap();
-                    let signed_proposal_bytes: Vec<u8> = signed_proposal.try_into().unwrap();
-                    let res = self.handle_proposal(&signed_proposal_bytes[..], true, true);
+                    let res = self.handle_proposal(&body[..], true, true);
                     if let Ok((h, r)) = res {
                         trace!(
                             "recive handle_proposal ok {:?} self height {} round {} step {:?}",
