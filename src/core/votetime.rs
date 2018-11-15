@@ -28,23 +28,17 @@ pub struct TimeoutInfo {
     pub round: usize,
     pub step: Step,
 }
-//unsafe impl ::std::marker::Sync for TimeoutInfo {}
 
 pub struct WaitTimer {
     timer_seter: Receiver<TimeoutInfo>,
     timer_notify: Sender<TimeoutInfo>,
-    // thpool: ThreadPool,
 }
-
-//unsafe impl ::std::marker::Sync for WaitTimer {}
 
 impl WaitTimer {
     pub fn new(ts: Sender<TimeoutInfo>, rs: Receiver<TimeoutInfo>) -> WaitTimer {
-        // let pool = ThreadPool::new(THREAD_POOL_NUM);
         WaitTimer {
             timer_notify: ts,
             timer_seter: rs,
-            // thpool: pool,
         }
     }
 

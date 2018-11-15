@@ -130,7 +130,6 @@ pub struct Bft {
     locked_vote: Option<VoteSet>,
     // lock_round set, locked block means itself,else means proposal's block
     locked_block: Option<Block>,
-    //tx_pool: Pool,
     wal_log: Wal,
     send_filter: HashMap<Address, (usize, Step, Instant)>,
     last_commit_round: Option<usize>,
@@ -210,7 +209,6 @@ impl Bft {
         round: usize,
         address: &Address,
     ) -> Result<(), EngineError> {
-        //let ref p = self.params;
         let p = &self.auth_manage;
         if p.authorities.is_empty() {
             warn!("There are no authorities");
@@ -308,7 +306,6 @@ impl Bft {
             height, round, prop, self.lock_round
         );
         if self.lock_round.is_some() || prop.is_some() {
-            //let hash = H256::from(self.locked_block.clone().unwrap().crypt_hash());
             self.pub_and_broadcast_message(height, round, Step::Prevote, prop);
         } else {
             trace!(
@@ -510,7 +507,6 @@ impl Bft {
                         if hash.is_zero() {
                             tv = Duration::new(0, 0);
                             trace!("proc_precommit is zero");
-                        //self.proposal = None;
                         } else if self.proposal.is_some() {
                             if hash != self.proposal.unwrap() {
                                 trace!(
@@ -569,7 +565,6 @@ impl Bft {
     }
 
     fn save_wal_proof(&mut self, height: usize) {
-        //let msg = self.proof.clone();
         let bmsg = serialize(&self.proof, Infinite).unwrap();
         let _ = self.wal_log.save(height, LOG_TYPE_COMMITS, &bmsg);
     }
@@ -738,7 +733,6 @@ impl Bft {
             self.step
         );
         self.pub_message(msg.clone());
-        //self.wal_log.save(LOG_TYPE_VOTE,&msg).unwrap();
 
         if self.height >= height || (self.height == height && self.round >= round) {
             let ret = self.votes.add(
@@ -759,7 +753,6 @@ impl Bft {
     }
 
     fn is_validator(&self, address: &Address) -> bool {
-        //self.params.authorities.contains(address.into())
         self.auth_manage.validators.contains(address)
     }
 
@@ -857,7 +850,6 @@ impl Bft {
                     /*bellow commit content is suit for when chain not syncing ,but consensus need
                     process up */
                     if h > self.height || (h == self.height && r >= self.round) {
-                        //if h == self.height && r >= self.round {
                         debug!(
                             "handle_message get vote: \
                              height {:?}, \
@@ -1283,7 +1275,6 @@ impl Bft {
                     "in new_proposal,self.pre_hash is none: height {}, round {}",
                     self.height, self.round
                 );
-                //block.mut_header().set_prevhash(H256::default().0.to_vec());
             }
 
             let proof = self.proof.clone();
@@ -1505,7 +1496,7 @@ impl Bft {
             }
         } else {
             match rtkey {
-                //接受chain发送的 authorities_list
+                // accept authorities_list from chain
                 routing_key!(Chain >> RichStatus) => {
                     let rich_status = msg.take_rich_status().unwrap();
                     trace!("get new local status {:?}", rich_status.height);
@@ -1760,7 +1751,6 @@ impl Bft {
         let mut tv = self.params.timer.get_commit();
         let interval = Duration::from_millis(status.interval);
         if height > status_height
-        //|| self.is_round_proposer(status_height+1,INIT_ROUND,&self.params.signer.address).is_ok()
         {
             tv = Duration::new(0, 0);
         } else if cost_time < interval {
@@ -1941,7 +1931,6 @@ impl Bft {
             }
 
             if let Ok(oktm) = gtm {
-                //trace!("in select !height {},round {},step {:?}",oktm.height,oktm.round,oktm.step);
                 self.timeout_process(&oktm);
             }
 
