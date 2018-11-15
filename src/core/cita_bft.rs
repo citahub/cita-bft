@@ -34,7 +34,7 @@ use libproto::blockchain::{Block, BlockTxs, BlockWithProof, RichStatus};
 use libproto::consensus::{Proposal as ProtoProposal, SignedProposal, Vote as ProtoVote};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
-use libproto::{auth, Message, Origin};
+use libproto::{auth, Message, Origin, ZERO_ORIGIN};
 use proof::BftProof;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
@@ -1089,10 +1089,16 @@ impl Bft {
             wal_flag,
             need_verify
         );
-        if let Some((signed_proposal, origin)) = Message::try_from(body)
+        // compatibility with v0.20.x
+        let result = Message::try_from(body)
             .ok()
-            .and_then(|ref mut msg| msg.take_signed_proposal().map(|p| (p, msg.get_origin())))
-        {
+            .and_then(|mut msg| msg.take_signed_proposal().map(|p| (p, msg.get_origin())))
+            .or_else(|| {
+                SignedProposal::try_from(body)
+                    .ok()
+                    .map(|p| (p, ZERO_ORIGIN))
+            });
+        if let Some((signed_proposal, origin)) = result {
             let signature = signed_proposal.get_signature();
             if signature.len() != SIGNATURE_BYTES_LEN {
                 return Err(EngineError::InvalidSignature);
@@ -1746,8 +1752,7 @@ impl Bft {
         let cost_time = Instant::now() - self.htime;
         let mut tv = self.params.timer.get_commit();
         let interval = Duration::from_millis(status.interval);
-        if height > status_height
-        {
+        if height > status_height {
             tv = Duration::new(0, 0);
         } else if cost_time < interval {
             tv = interval - cost_time;
