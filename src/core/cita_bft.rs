@@ -48,6 +48,8 @@ use util::Hashable;
 const INIT_HEIGHT: usize = 1;
 const INIT_ROUND: usize = 0;
 
+const MAX_PROPOSAL_TIME_COEF: usize = 10;
+
 const LOG_TYPE_PROPOSE: u8 = 1;
 const LOG_TYPE_VOTE: u8 = 2;
 const LOG_TYPE_STATE: u8 = 3;
@@ -366,6 +368,7 @@ impl Bft {
                         } else if self.proposal == Some(*hash) {
                             self.lock_round = Some(round);
                             self.locked_vote = Some(vote_set.clone());
+                            tv = Duration::new(0, 0);
                         } else {
                             let mut clean_flag = true;
                             let op = self.proposals.get_proposal(height, round);
@@ -519,6 +522,7 @@ impl Bft {
                             } else {
                                 self.proposal = Some(hash);
                                 self.last_commit_round = Some(round);
+                                tv = Duration::new(0, 0);
                             }
                         } else {
                             trace!("proc_precommit hash is ok,but self.propose is noe");
@@ -1264,9 +1268,11 @@ impl Bft {
                 if *height == self.height - 1 {
                     flag = true;
                     block.set_body(blocktxs.get_body().clone());
+                    break;
                 }
             }
             if !flag && self.height > INIT_HEIGHT {
+                info!("BLOCKTXS not give {} txs", self.height);
                 return;
             }
 
@@ -1773,7 +1779,14 @@ impl Bft {
     }
 
     fn new_round_start(&mut self, height: usize, round: usize) {
-        let mut tv = self.params.timer.get_propose() * ((round + 1) as u32);
+        let coef = {
+            if round > MAX_PROPOSAL_TIME_COEF {
+                MAX_PROPOSAL_TIME_COEF
+            } else {
+                round
+            }
+        };
+        let mut tv = self.params.timer.get_propose() * 2u32.pow(coef as u32);
         if self.proposals.get_proposal(height, round).is_some() {
             tv = Duration::new(0, 0);
         } else if self
