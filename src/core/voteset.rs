@@ -19,13 +19,11 @@ use super::Step;
 use bincode::{serialize, Infinite};
 use crypto::{pubkey_to_address, Sign, Signature};
 use hashable::Hashable;
-use libproto::blockchain::{Block, Transaction};
+use libproto::blockchain::CompactBlock;
 use lru_cache::LruCache;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::str::FromStr;
-use types::{clean_0x, Address, H256};
-use util::BLOCKLIMIT;
+use types::{Address, H256};
 
 // height -> round collector
 #[derive(Debug)]
@@ -265,52 +263,6 @@ pub struct Proposal {
     pub lock_votes: Option<VoteSet>,
 }
 
-pub fn verify_tx_version(tx: &Transaction, version: u32) -> bool {
-    if tx.get_version() != version {
-        return false;
-    }
-    true
-}
-
-// verify to, tx nonce and valid_until_block
-pub fn verify_tx(tx: &Transaction, height: u64) -> bool {
-    let version = tx.get_version();
-    if version == 0 {
-        // new to must be empty
-        if !tx.get_to_v1().is_empty() {
-            return false;
-        }
-        let to = clean_0x(tx.get_to());
-        if !to.is_empty() && Address::from_str(to).is_err() {
-            return false;
-        }
-    } else if version == 1 {
-        // old to must be empty
-        if !tx.get_to().is_empty() {
-            return false;
-        }
-        // check to_v1
-        let to = tx.get_to_v1();
-        if !to.is_empty() && to.len() != 20 {
-            return false;
-        }
-    } else {
-        error!("unexpected version {}!", version);
-        return false;
-    }
-
-    let nonce = tx.get_nonce();
-    if nonce.len() > 128 {
-        return false;
-    }
-    let valid_until_block = tx.get_valid_until_block();
-    if height > valid_until_block || valid_until_block >= (height + BLOCKLIMIT) {
-        return false;
-    }
-
-    true
-}
-
 impl Proposal {
     pub fn check(&self, h: usize, authorities: &[Address]) -> bool {
         if self.lock_round.is_none() && self.lock_votes.is_none() {
@@ -326,7 +278,7 @@ impl Proposal {
 
             match ret {
                 Ok(Some(p)) => {
-                    if let Ok(block) = Block::try_from(&self.block) {
+                    if let Ok(block) = CompactBlock::try_from(&self.block) {
                         block.crypt_hash() == p
                     } else {
                         false

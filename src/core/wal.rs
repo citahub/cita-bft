@@ -31,6 +31,7 @@ pub enum LogType {
     Commits = 5,
     VerifiedPropose = 6,
     AuthTxs = 7,
+    VerifiedBlock = 8,
 }
 
 impl From<u8> for LogType {
@@ -43,6 +44,7 @@ impl From<u8> for LogType {
             5 => LogType::Commits,
             6 => LogType::VerifiedPropose,
             7 => LogType::AuthTxs,
+            8 => LogType::VerifiedBlock,
             _ => panic!("Invalid LogType."),
         }
     }

@@ -24,24 +24,25 @@
 //!
 //! 1. Subscribe channel
 //!
-//!     | Queue     | PubModule | Message Type    |
-//!     | --------- | --------- | --------------- |
-//!     | consensus | Net       | SignedProposal  |
-//!     | consensus | Net       | RawBytes        |
-//!     | consensus | Chain     | RichStatus      |
-//!     | consensus | Auth      | BlockTxs        |
-//!     | consensus | Auth      | VerifyBlockResp |
-//!     | consensus | Snapshot  | SnapshotReq     |
+//!     | Queue     | PubModule | Message Type          |
+//!     | --------- | --------- | --------------------- |
+//!     | consensus | Net       | CompactSignedProposal |
+//!     | consensus | Net       | RawBytes              |
+//!     | consensus | Chain     | RichStatus            |
+//!     | consensus | Auth      | BlockTxs              |
+//!     | consensus | Auth      | VerifyBlockResp       |
+//!     | consensus | Snapshot  | SnapshotReq           |
 //!
 //! 2. Publish channel
 //!
-//!     | Queue     | PubModule | SubModule       | Message Type    |
-//!     | --------- | --------- | --------------- | --------------- |
-//!     | consensus | Consensus | Auth            | VerifyBlockReq  |
-//!     | consensus | Consensus | Net             | RawBytes        |
-//!     | consensus | Consensus | Chain, Executor | BlockWithProof  |
-//!     | consensus | Consensus | Net, Executor   | SignedProposal  |
-//!     | consensus | Consensus | Snapshot        | SnapshotResp    |
+//!     | Queue     | PubModule | SubModule       | Message Type          |
+//!     | --------- | --------- | --------------- | --------------------- |
+//!     | consensus | Consensus | Auth            | VerifyBlockReq        |
+//!     | consensus | Consensus | Net             | RawBytes              |
+//!     | consensus | Consensus | Chain, Executor | BlockWithProof        |
+//!     | consensus | Consensus | Net             | CompactSignedProposal |
+//!     | consensus | Consensus | Executor        | SignedProposal        |
+//!     | consensus | Consensus | Snapshot        | SnapshotResp          |
 //!
 
 #![feature(mpsc_select)]
@@ -170,7 +171,7 @@ fn main() {
     start_pubsub(
         "consensus",
         routing_key!([
-            Net >> SignedProposal,
+            Net >> CompactSignedProposal,
             Net >> RawBytes,
             Chain >> RichStatus,
             Auth >> BlockTxs,
