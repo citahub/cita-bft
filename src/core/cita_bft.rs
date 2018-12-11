@@ -41,9 +41,9 @@ use std::fs;
 use std::sync::mpsc::{Receiver, RecvError, Sender};
 use std::time::{Duration, Instant};
 
+use cita_directories::DataPath;
+use hashable::Hashable;
 use types::{Address, H256};
-use util::datapath::DataPath;
-use util::Hashable;
 
 const INIT_HEIGHT: usize = 1;
 const INIT_ROUND: usize = 0;
@@ -1029,9 +1029,9 @@ impl Bft {
             return true;
         }
         transactions.into_iter().all(|tx| {
-            let result = verify_tx_version(tx.get_transaction(), version);
+            let raw_tx = tx.get_transaction();
+            let result = verify_tx_version(raw_tx, version);
             if !result {
-                let raw_tx = tx.get_transaction();
                 warn!(
                     "verify tx version failed, tx version: {}, current chain version: {}",
                     raw_tx.get_version(),
@@ -1044,14 +1044,13 @@ impl Bft {
 
     fn verify_req(&mut self, origin: Origin, block: &Block, vheight: usize, vround: usize) -> bool {
         let transactions = block.get_body().get_transactions();
-        let len = transactions.len();
-        if len == 0 {
+        if transactions.is_empty() {
             return true;
         }
         let verify_ok = block.check_hash() && transactions.into_iter().all(|tx| {
-            let result = verify_tx(tx.get_transaction(), vheight as u64);
+            let raw_tx = tx.get_transaction();
+            let result = verify_tx(raw_tx, vheight as u64);
             if !result {
-                let raw_tx = tx.get_transaction();
                 warn!(
                     "verify tx in proposal failed, tx nonce: {}, tx valid_until_block: {}, proposal height: {}",
                     raw_tx.get_nonce(),
@@ -1066,7 +1065,7 @@ impl Bft {
             let verify_req = block.block_verify_req(reqid);
             trace!(
                 "send verify_req with {} txs with block verify request id: {} and height:{} round {} ",
-                len,
+                transactions.len(),
                 reqid,
                 vheight,
                 vround
@@ -1861,7 +1860,7 @@ impl Bft {
         }
     }
 
-    pub fn start(&mut self) {
+    fn load_wal_log(&mut self) {
         let vec_buf = self.wal_log.load();
         for (mtype, vec_out) in vec_buf {
             trace!("******* wal_log type {}", mtype);
@@ -1923,6 +1922,10 @@ impl Bft {
                 }
             }
         }
+    }
+
+    pub fn start(&mut self) {
+        self.load_wal_log();
         // TODO : broadcast some message, based on current state
         if self.height >= INIT_HEIGHT {
             self.redo_work();
@@ -1936,10 +1939,10 @@ impl Bft {
                 let tn = &self.timer_notity;
                 let pn = &self.pub_recver;
                 select!{
-                    tm = tn.recv()=>{
+                    tm = tn.recv() => {
                         gtm = tm;
                     },
-                    info = pn.recv()=>{
+                    info = pn.recv() => {
                         ginfo = info;
                     }
                 }
