@@ -18,13 +18,14 @@
 use super::Step;
 use bincode::{serialize, Infinite};
 use crypto::{pubkey_to_address, Sign, Signature};
+use hashable::Hashable;
 use libproto::blockchain::{Block, Transaction};
 use lru_cache::LruCache;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::str::FromStr;
 use types::{clean_0x, Address, H256};
-use util::{Hashable, BLOCKLIMIT};
+use util::BLOCKLIMIT;
 
 // height -> round collector
 #[derive(Debug)]

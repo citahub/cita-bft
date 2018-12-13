@@ -51,11 +51,13 @@
 extern crate authority_manage;
 extern crate bincode;
 extern crate cita_crypto as crypto;
+extern crate cita_directories;
 extern crate cita_types as types;
 extern crate clap;
 extern crate cpuprofiler;
 extern crate dotenv;
 extern crate engine;
+extern crate hashable;
 extern crate min_max_heap;
 #[macro_use]
 extern crate libproto;

@@ -23,6 +23,31 @@ use std::str;
 
 const DELETE_FILE_INTERVAL: usize = 3;
 
+pub enum LogType {
+    Propose = 1,
+    Vote = 2,
+    State = 3,
+    PrevHash = 4,
+    Commits = 5,
+    VerifiedPropose = 6,
+    AuthTxs = 7,
+}
+
+impl From<u8> for LogType {
+    fn from(s: u8) -> LogType {
+        match s {
+            1 => LogType::Propose,
+            2 => LogType::Vote,
+            3 => LogType::State,
+            4 => LogType::PrevHash,
+            5 => LogType::Commits,
+            6 => LogType::VerifiedPropose,
+            7 => LogType::AuthTxs,
+            _ => panic!("Invalid LogType."),
+        }
+    }
+}
+
 pub struct Wal {
     height_fs: BTreeMap<usize, File>,
     dir: String,
@@ -114,7 +139,8 @@ impl Wal {
         Ok(())
     }
 
-    pub fn save(&mut self, height: usize, mtype: u8, msg: &[u8]) -> io::Result<usize> {
+    pub fn save(&mut self, height: usize, log_type: LogType, msg: &[u8]) -> io::Result<usize> {
+        let mtype = log_type as u8;
         if !self.height_fs.contains_key(&height) {
             // 2 more higher then current height, not process it
             if height > self.current_height + 1 {

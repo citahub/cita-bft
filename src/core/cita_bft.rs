@@ -26,7 +26,7 @@ use core::voteset::{
 };
 
 use core::votetime::TimeoutInfo;
-use core::wal::Wal;
+use core::wal::{LogType, Wal};
 
 use crypto::{pubkey_to_address, CreateKey, Sign, Signature, SIGNATURE_BYTES_LEN};
 use engine::{unix_now, AsMillis, EngineError, Mismatch};
@@ -41,32 +41,38 @@ use std::fs;
 use std::sync::mpsc::{Receiver, RecvError, Sender};
 use std::time::{Duration, Instant};
 
+use cita_directories::DataPath;
+use hashable::Hashable;
 use types::{Address, H256};
-use util::datapath::DataPath;
-use util::Hashable;
 
 const INIT_HEIGHT: usize = 1;
 const INIT_ROUND: usize = 0;
 
 const MAX_PROPOSAL_TIME_COEF: usize = 10;
 
-const LOG_TYPE_PROPOSE: u8 = 1;
-const LOG_TYPE_VOTE: u8 = 2;
-const LOG_TYPE_STATE: u8 = 3;
-const LOG_TYPE_PREV_HASH: u8 = 4;
-const LOG_TYPE_COMMITS: u8 = 5;
-const LOG_TYPE_VERIFIED_PROPOSE: u8 = 6;
-const LOG_TYPE_AUTH_TXS: u8 = 7;
-
 const TIMEOUT_RETRANSE_MULTIPLE: u32 = 15;
 const TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE: u32 = 20;
 
-const VERIFIED_PROPOSAL_OK: i8 = 1;
-const VERIFIED_PROPOSAL_FAILED: i8 = -1;
-const VERIFIED_PROPOSAL_UNDO: i8 = 0;
-
 pub type TransType = (String, Vec<u8>);
 pub type PubType = (String, Vec<u8>);
+
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+enum VerifiedProposalStatus {
+    Ok = 1,
+    Failed = -1,
+    Undo = 0,
+}
+
+impl From<i8> for VerifiedProposalStatus {
+    fn from(s: i8) -> VerifiedProposalStatus {
+        match s {
+            1 => VerifiedProposalStatus::Ok,
+            -1 => VerifiedProposalStatus::Failed,
+            0 => VerifiedProposalStatus::Undo,
+            _ => panic!("Invalid VerifiedProposalStatus."),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, PartialOrd, Eq, Clone, Copy, Hash)]
 pub enum Step {
@@ -90,15 +96,15 @@ impl Default for Step {
 impl From<u8> for Step {
     fn from(s: u8) -> Step {
         match s {
-            0u8 => Step::Propose,
-            1u8 => Step::ProposeWait,
-            2u8 => Step::Prevote,
-            3u8 => Step::PrevoteWait,
-            4u8 => Step::PrecommitAuth,
-            5u8 => Step::Precommit,
-            6u8 => Step::PrecommitWait,
-            7u8 => Step::Commit,
-            8u8 => Step::CommitWait,
+            0 => Step::Propose,
+            1 => Step::ProposeWait,
+            2 => Step::Prevote,
+            3 => Step::PrevoteWait,
+            4 => Step::PrecommitAuth,
+            5 => Step::Precommit,
+            6 => Step::PrecommitWait,
+            7 => Step::Commit,
+            8 => Step::CommitWait,
             _ => panic!("Invalid step."),
         }
     }
@@ -139,7 +145,7 @@ pub struct Bft {
     auth_manage: AuthorityManage,
     consensus_power: bool,
     //params meaning: key :index 0->height,1->round ,value:0->verified msg,1->verified result
-    unverified_msg: BTreeMap<(usize, usize), (Message, i8)>,
+    unverified_msg: BTreeMap<(usize, usize), (Message, VerifiedProposalStatus)>,
     // VecDeque might work, Almost always it is better to use Vec or VecDeque instead of LinkedList
     block_txs: VecDeque<(usize, BlockTxs)>,
     block_proof: Option<(usize, BlockWithProof)>,
@@ -418,10 +424,10 @@ impl Bft {
         n == self.auth_manage.validator_n()
     }
 
-    fn get_proposal_verified_result(&self, height: usize, round: usize) -> i8 {
+    fn get_proposal_verified_result(&self, height: usize, round: usize) -> VerifiedProposalStatus {
         self.unverified_msg
             .get(&(height, round))
-            .map_or(VERIFIED_PROPOSAL_OK, |res| res.1)
+            .map_or(VerifiedProposalStatus::Ok, |res| res.1)
     }
 
     fn pre_proc_precommit(&mut self) -> bool {
@@ -442,11 +448,11 @@ impl Bft {
             }
         }
         //polc is ok,but not verified , not send precommit
-        if lock_ok && verify_ok == VERIFIED_PROPOSAL_UNDO {
+        if lock_ok && verify_ok == VerifiedProposalStatus::Undo {
             return false;
         }
 
-        if lock_ok && verify_ok == VERIFIED_PROPOSAL_OK {
+        if lock_ok && verify_ok == VerifiedProposalStatus::Ok {
             self.pub_and_broadcast_message(height, round, Step::Precommit, proposal);
         } else {
             self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
@@ -570,7 +576,7 @@ impl Bft {
 
     fn save_wal_proof(&mut self, height: usize) {
         let bmsg = serialize(&self.proof, Infinite).unwrap();
-        let _ = self.wal_log.save(height, LOG_TYPE_COMMITS, &bmsg);
+        let _ = self.wal_log.save(height, LogType::Commits, &bmsg);
     }
 
     fn proc_commit_after(&mut self, height: usize, round: usize) -> bool {
@@ -583,7 +589,7 @@ impl Bft {
             self.change_state_step(height + 1, INIT_ROUND, Step::Propose, true);
             if let Some(hash) = self.pre_hash {
                 let buf = hash.to_vec();
-                let _ = self.wal_log.save(height + 1, LOG_TYPE_PREV_HASH, &buf);
+                let _ = self.wal_log.save(height + 1, LogType::PrevHash, &buf);
             }
 
             if self.proof.height != now_height && now_height > 0 {
@@ -751,7 +757,7 @@ impl Bft {
             );
 
             if ret {
-                self.wal_log.save(height, LOG_TYPE_VOTE, &msg).unwrap();
+                self.wal_log.save(height, LogType::Vote, &msg).unwrap();
             }
         }
     }
@@ -770,7 +776,7 @@ impl Bft {
         }
 
         let message = serialize(&(height, round, s), Infinite).unwrap();
-        let _ = self.wal_log.save(height, LOG_TYPE_STATE, &message);
+        let _ = self.wal_log.save(height, LogType::State, &message);
     }
 
     fn handle_state(&mut self, msg: &[u8]) {
@@ -881,7 +887,7 @@ impl Bft {
                         );
                         if ret {
                             if wal_flag {
-                                self.wal_log.save(h, LOG_TYPE_VOTE, &log_msg).unwrap();
+                                self.wal_log.save(h, LogType::Vote, &log_msg).unwrap();
                             }
                             if h > self.height {
                                 return Err(EngineError::VoteMsgForth(h));
@@ -1023,9 +1029,9 @@ impl Bft {
             return true;
         }
         transactions.into_iter().all(|tx| {
-            let result = verify_tx_version(tx.get_transaction(), version);
+            let raw_tx = tx.get_transaction();
+            let result = verify_tx_version(raw_tx, version);
             if !result {
-                let raw_tx = tx.get_transaction();
                 warn!(
                     "verify tx version failed, tx version: {}, current chain version: {}",
                     raw_tx.get_version(),
@@ -1038,14 +1044,13 @@ impl Bft {
 
     fn verify_req(&mut self, origin: Origin, block: &Block, vheight: usize, vround: usize) -> bool {
         let transactions = block.get_body().get_transactions();
-        let len = transactions.len();
-        if len == 0 {
+        if transactions.is_empty() {
             return true;
         }
         let verify_ok = block.check_hash() && transactions.into_iter().all(|tx| {
-            let result = verify_tx(tx.get_transaction(), vheight as u64);
+            let raw_tx = tx.get_transaction();
+            let result = verify_tx(raw_tx, vheight as u64);
             if !result {
-                let raw_tx = tx.get_transaction();
                 warn!(
                     "verify tx in proposal failed, tx nonce: {}, tx valid_until_block: {}, proposal height: {}",
                     raw_tx.get_nonce(),
@@ -1060,7 +1065,7 @@ impl Bft {
             let verify_req = block.block_verify_req(reqid);
             trace!(
                 "send verify_req with {} txs with block verify request id: {} and height:{} round {} ",
-                len,
+                transactions.len(),
                 reqid,
                 vheight,
                 vround
@@ -1074,7 +1079,7 @@ impl Bft {
                 ))
                 .unwrap();
             self.unverified_msg
-                .insert((vheight, vround), (msg, VERIFIED_PROPOSAL_UNDO));
+                .insert((vheight, vround), (msg, VerifiedProposalStatus::Undo));
         }
         verify_ok
     }
@@ -1149,7 +1154,7 @@ impl Bft {
 
                 if (height == self.height && round >= self.round) || height > self.height {
                     if wal_flag {
-                        self.wal_log.save(height, LOG_TYPE_PROPOSE, body).unwrap();
+                        self.wal_log.save(height, LogType::Propose, body).unwrap();
                     }
                     debug!("add proposal height {} round {}!", height, round);
                     let blk = block.try_into().unwrap();
@@ -1336,7 +1341,7 @@ impl Bft {
         };
         let bmsg = self.pub_proposal(&proposal);
         self.wal_log
-            .save(self.height, LOG_TYPE_PROPOSE, &bmsg)
+            .save(self.height, LogType::Propose, &bmsg)
             .unwrap();
         self.proposals.add(self.height, self.round, proposal);
     }
@@ -1410,7 +1415,7 @@ impl Bft {
             }
         } else if tminfo.step == Step::PrecommitAuth {
             if let Some((msg, res)) = self.unverified_msg.get(&(tminfo.height, tminfo.round)) {
-                if *res == VERIFIED_PROPOSAL_UNDO {
+                if *res == VerifiedProposalStatus::Undo {
                     self.pub_sender
                         .send((
                             routing_key!(Consensus >> VerifyBlockReq).into(),
@@ -1418,7 +1423,7 @@ impl Bft {
                         ))
                         .unwrap();
                 } else {
-                    warn!("already get verified resutl {}", *res);
+                    warn!("already get verified resutl {:?}", *res);
                 }
             };
         } else if tminfo.step == Step::Precommit {
@@ -1547,24 +1552,25 @@ impl Bft {
                     let vround = vround as usize;
 
                     let verify_res = if resp.get_ret() == auth::Ret::OK {
-                        VERIFIED_PROPOSAL_OK
+                        VerifiedProposalStatus::Ok
                     } else {
-                        VERIFIED_PROPOSAL_FAILED
+                        VerifiedProposalStatus::Failed
                     };
 
                     if let Some(res) = self.unverified_msg.get_mut(&(vheight, vround)) {
                         res.1 = verify_res;
-                        let msg = serialize(&(vheight, vround, verify_res), Infinite).unwrap();
-                        let _ = self.wal_log.save(vheight, LOG_TYPE_VERIFIED_PROPOSE, &msg);
+                        let msg =
+                            serialize(&(vheight, vround, verify_res as i8), Infinite).unwrap();
+                        let _ = self.wal_log.save(vheight, LogType::VerifiedPropose, &msg);
                     };
 
                     info!(
-                        "recive VERIFYBLKRESP verify_id {} height {} round {} ok {} self height {} round {} step {:?}",
+                        "recive VERIFYBLKRESP verify_id {} height {} round {} ok {:?} self height {} round {} step {:?}",
                         verify_id, vheight, vround, verify_res, self.height, self.round, self.step
                     );
                     if vheight == self.height && vround == self.round {
                         //verify not ok,so clean the proposal info
-                        if verify_res == VERIFIED_PROPOSAL_OK {
+                        if verify_res == VerifiedProposalStatus::Ok {
                             if self.step == Step::PrecommitAuth && self.pre_proc_precommit() {
                                 self.change_state_step(vheight, vround, Step::Precommit, false);
                                 self.proc_precommit(vheight, vround);
@@ -1599,7 +1605,7 @@ impl Bft {
                     let height = block_txs.get_height() as usize;
                     let msg: Vec<u8> = (&block_txs).try_into().unwrap();
                     self.block_txs.push_back((height, block_txs));
-                    let _ = self.wal_log.save(height, LOG_TYPE_AUTH_TXS, &msg);
+                    let _ = self.wal_log.save(height, LogType::AuthTxs, &msg);
                     let now_height = self.height;
                     let now_round = self.round;
                     let now_step = self.step;
@@ -1851,22 +1857,16 @@ impl Bft {
                 self.new_round_start(height, round + 1);
             }
         } else if self.step == Step::CommitWait {
-            /*self.timer_seter.send(
-            TimeoutInfo{
-                timeval:self.params.timer.get_commit(),
-                height:height,
-                round:round,
-                step:Step::CommitWait});*/
         }
     }
 
-    pub fn start(&mut self) {
+    fn load_wal_log(&mut self) {
         let vec_buf = self.wal_log.load();
         for (mtype, vec_out) in vec_buf {
             trace!("******* wal_log type {}", mtype);
-            // TODO change mtype to enum
-            match mtype {
-                LOG_TYPE_PROPOSE => {
+            let log_type: LogType = mtype.into();
+            match log_type {
+                LogType::Propose => {
                     let res = self.handle_proposal(&vec_out[..], false, true);
                     if let Ok((h, r)) = res {
                         let pres = self.proc_proposal(h, r);
@@ -1875,7 +1875,7 @@ impl Bft {
                         }
                     }
                 }
-                LOG_TYPE_VOTE => {
+                LogType::Vote => {
                     let res = self.handle_message(&vec_out[..], false);
                     if let Ok((h, r, s)) = res {
                         if s == Step::Prevote {
@@ -1885,43 +1885,47 @@ impl Bft {
                         }
                     }
                 }
-                LOG_TYPE_STATE => {
+                LogType::State => {
                     self.handle_state(&vec_out[..]);
                 }
-                LOG_TYPE_PREV_HASH => {
+                LogType::PrevHash => {
                     let pre_hash = H256::from_slice(&vec_out);
                     self.pre_hash = Some(pre_hash);
                 }
-                LOG_TYPE_COMMITS => {
+                LogType::Commits => {
                     trace!(" wal proof begining!");
                     if let Ok(proof) = deserialize(&vec_out) {
                         trace!(" wal proof here {:?}", proof);
                         self.proof = proof;
                     }
                 }
-                LOG_TYPE_VERIFIED_PROPOSE => {
-                    trace!(" LOG_TYPE_VERIFIED_PROPOSE begining!");
+                LogType::VerifiedPropose => {
+                    trace!(" LogType::VerifiedPropose begining!");
                     if let Ok(decode) = deserialize(&vec_out) {
                         let (vheight, vround, verified): (usize, usize, i8) = decode;
-                        if verified == VERIFIED_PROPOSAL_OK {
+                        let status: VerifiedProposalStatus = verified.into();
+                        if status == VerifiedProposalStatus::Ok {
                             self.unverified_msg.remove(&(vheight, vround));
                         } else {
                             self.clean_saved_info();
                         }
                     }
                 }
-                LOG_TYPE_AUTH_TXS => {
-                    trace!(" LOG_TYPE_AUTH_TXS begining!");
+                LogType::AuthTxs => {
+                    trace!(" LogType::AuthTxs begining!");
                     let blocktxs = BlockTxs::try_from(&vec_out);
                     if let Ok(blocktxs) = blocktxs {
                         let height = blocktxs.get_height() as usize;
-                        trace!(" LOG_TYPE_AUTH_TXS add height {}!", height);
+                        trace!(" LogType::AuthTxs add height {}!", height);
                         self.block_txs.push_back((height, blocktxs));
                     }
                 }
-                _ => {}
             }
         }
+    }
+
+    pub fn start(&mut self) {
+        self.load_wal_log();
         // TODO : broadcast some message, based on current state
         if self.height >= INIT_HEIGHT {
             self.redo_work();
@@ -1935,10 +1939,10 @@ impl Bft {
                 let tn = &self.timer_notity;
                 let pn = &self.pub_recver;
                 select!{
-                    tm = tn.recv()=>{
+                    tm = tn.recv() => {
                         gtm = tm;
                     },
-                    info = pn.recv()=>{
+                    info = pn.recv() => {
                         ginfo = info;
                     }
                 }
