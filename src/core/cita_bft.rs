@@ -120,10 +120,10 @@ fn get_idx_from_reqid(reqid: u64) -> (u64, u64) {
 
 pub struct Bft {
     pub_sender: Sender<PubType>,
-    pub_recver: Receiver<TransType>,
+    pub_receiver: Receiver<TransType>,
 
     timer_seter: Sender<TimeoutInfo>,
-    timer_notity: Receiver<TimeoutInfo>,
+    timer_notify: Receiver<TimeoutInfo>,
 
     params: BftParams,
     height: usize,
@@ -172,9 +172,9 @@ impl Bft {
         let logpath = DataPath::wal_path();
         Bft {
             pub_sender: s,
-            pub_recver: r,
+            pub_receiver: r,
             timer_seter: ts,
-            timer_notity: rs,
+            timer_notify: rs,
 
             params,
             height: 0,
@@ -1428,8 +1428,8 @@ impl Bft {
             };
         } else if tminfo.step == Step::Precommit {
             /*in this case,need resend prevote : my net server can be connected but other node's
-            server not connected when staring.  maybe my node recive enough vote(prevote),but others
-            did not recive enough vote,so even if my node step precommit phase, i need resend prevote also.
+            server not connected when staring.  maybe my node receive enough vote(prevote),but others
+            did not receive enough vote,so even if my node step precommit phase, i need resend prevote also.
             */
             self.pre_proc_prevote();
             self.pre_proc_precommit();
@@ -1472,7 +1472,7 @@ impl Bft {
                     let res = self.handle_proposal(&body[..], true, true);
                     if let Ok((h, r)) = res {
                         trace!(
-                            "recive handle_proposal ok {:?} self height {} round {} step {:?}",
+                            "recieve handle_proposal ok {:?} self height {} round {} step {:?}",
                             (h, r),
                             self.height,
                             self.round,
@@ -1565,7 +1565,7 @@ impl Bft {
                     };
 
                     info!(
-                        "recive VERIFYBLKRESP verify_id {} height {} round {} ok {:?} self height {} round {} step {:?}",
+                        "recieve VERIFYBLKRESP verify_id {} height {} round {} ok {:?} self height {} round {} step {:?}",
                         verify_id, vheight, vround, verify_res, self.height, self.round, self.step
                     );
                     if vheight == self.height && vround == self.round {
@@ -1598,7 +1598,7 @@ impl Bft {
                 routing_key!(Auth >> BlockTxs) => {
                     let block_txs = msg.take_block_txs().unwrap();
                     debug!(
-                        "recive blocktxs height {} self height {}",
+                        "recieve blocktxs height {} self height {}",
                         block_txs.get_height(),
                         self.height
                     );
@@ -1936,8 +1936,8 @@ impl Bft {
             let mut ginfo = Err(RecvError);
 
             {
-                let tn = &self.timer_notity;
-                let pn = &self.pub_recver;
+                let tn = &self.timer_notify;
+                let pn = &self.pub_receiver;
                 select!{
                     tm = tn.recv() => {
                         gtm = tm;
