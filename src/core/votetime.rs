@@ -21,12 +21,31 @@ use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TimeoutInfo {
     pub timeval: Instant,
     pub height: usize,
     pub round: usize,
     pub step: Step,
+}
+
+impl ::std::fmt::Display for TimeoutInfo {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        write!(
+            f,
+            "TimeoutInfo {{ h: {}, r: {}, s: {}, t: {:?} }}",
+            self.height,
+            self.round,
+            self.step,
+            self.timeval.elapsed()
+        )
+    }
+}
+
+impl ::std::fmt::Debug for TimeoutInfo {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        write!(f, "{}", self)
+    }
 }
 
 pub struct WaitTimer {
