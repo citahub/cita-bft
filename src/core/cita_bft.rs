@@ -1408,6 +1408,14 @@ impl Bft {
                             msg.try_into().unwrap(),
                         ))
                         .unwrap();
+                    let now = Instant::now();
+                    let _ = self.timer_seter.send(TimeoutInfo {
+                        timeval: now
+                            + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
+                        height: tminfo.height,
+                        round: tminfo.round,
+                        step: Step::PrecommitAuth,
+                    });
                 } else {
                     warn!("already get verified resutl {:?}", *res);
                 }
