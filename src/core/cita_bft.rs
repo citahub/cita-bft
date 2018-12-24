@@ -21,20 +21,18 @@ use authority_manage::AuthorityManage;
 use bincode::{deserialize, serialize, Infinite};
 
 use core::params::BftParams;
-use core::voteset::{
-    verify_tx, verify_tx_version, Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet,
-};
+use core::voteset::{Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet};
 
 use core::votetime::TimeoutInfo;
 use core::wal::{LogType, Wal};
 
 use crypto::{pubkey_to_address, CreateKey, Sign, Signature, SIGNATURE_BYTES_LEN};
 use engine::{unix_now, AsMillis, EngineError, Mismatch};
-use libproto::blockchain::{Block, BlockTxs, BlockWithProof, RichStatus};
-use libproto::consensus::{Proposal as ProtoProposal, SignedProposal, Vote as ProtoVote};
+use libproto::blockchain::{Block, BlockTxs, BlockWithProof, CompactBlock, RichStatus};
+use libproto::consensus::{CompactProposal, CompactSignedProposal, Vote as ProtoVote};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
-use libproto::{auth, Message, Origin, ZERO_ORIGIN};
+use libproto::{auth, Message};
 use proof::BftProof;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
@@ -57,19 +55,19 @@ pub type TransType = (String, Vec<u8>);
 pub type PubType = (String, Vec<u8>);
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
-enum VerifiedProposalStatus {
+enum VerifiedBlockStatus {
     Ok = 1,
     Failed = -1,
     Undo = 0,
 }
 
-impl From<i8> for VerifiedProposalStatus {
-    fn from(s: i8) -> VerifiedProposalStatus {
+impl From<i8> for VerifiedBlockStatus {
+    fn from(s: i8) -> Self {
         match s {
-            1 => VerifiedProposalStatus::Ok,
-            -1 => VerifiedProposalStatus::Failed,
-            0 => VerifiedProposalStatus::Undo,
-            _ => panic!("Invalid VerifiedProposalStatus."),
+            1 => VerifiedBlockStatus::Ok,
+            -1 => VerifiedBlockStatus::Failed,
+            0 => VerifiedBlockStatus::Undo,
+            _ => panic!("Invalid VerifiedBlockStatus."),
         }
     }
 }
@@ -116,14 +114,6 @@ impl ::std::fmt::Display for Step {
     }
 }
 
-fn gen_reqid_from_idx(h: u64, r: u64) -> u64 {
-    ((h & 0xffff_ffff_ffff) << 16) | r
-}
-
-fn get_idx_from_reqid(reqid: u64) -> (u64, u64) {
-    (reqid >> 16, reqid & 0xffff)
-}
-
 pub struct Bft {
     pub_sender: Sender<PubType>,
     pub_receiver: Receiver<TransType>,
@@ -143,7 +133,7 @@ pub struct Bft {
     lock_round: Option<usize>,
     locked_vote: Option<VoteSet>,
     // lock_round set, locked block means itself,else means proposal's block
-    locked_block: Option<Block>,
+    locked_block: Option<CompactBlock>,
     wal_log: Wal,
     send_filter: HashMap<Address, (usize, Step, Instant)>,
     last_commit_round: Option<usize>,
@@ -151,10 +141,12 @@ pub struct Bft {
     auth_manage: AuthorityManage,
     consensus_power: bool,
     //params meaning: key :index 0->height,1->round ,value:0->verified msg,1->verified result
-    unverified_msg: BTreeMap<(usize, usize), (Message, VerifiedProposalStatus)>,
+    unverified_msg: BTreeMap<(usize, usize), (Message, VerifiedBlockStatus)>,
     // VecDeque might work, Almost always it is better to use Vec or VecDeque instead of LinkedList
     block_txs: VecDeque<(usize, BlockTxs)>,
     block_proof: Option<(usize, BlockWithProof)>,
+
+    verified_blocks: HashMap<H256, Block>,
 
     // when snaphsot restore, clear wal data
     is_snapshot: bool,
@@ -239,6 +231,7 @@ impl Bft {
             unverified_msg: BTreeMap::new(),
             block_txs: VecDeque::new(),
             block_proof: None,
+            verified_blocks: HashMap::new(),
             is_snapshot: false,
             is_cleared: false,
             version: None,
@@ -292,51 +285,74 @@ impl Bft {
             .unwrap();
     }
 
-    pub fn pub_proposal(&self, proposal: &Proposal) -> Vec<u8> {
-        let mut proto_proposal = ProtoProposal::new();
-        let pro_block = Block::try_from(&proposal.block).unwrap();
-        proto_proposal.set_block(pro_block);
-        proto_proposal.set_islock(proposal.lock_round.is_some());
-        proto_proposal.set_round(self.round as u64);
-        proto_proposal.set_height(self.height as u64);
-        let is_lock = proposal.lock_round.is_some();
-        if is_lock {
-            proto_proposal.set_lock_round(proposal.lock_round.unwrap() as u64);
+    pub fn pub_proposal(&mut self, proposal: &Proposal) -> Vec<u8> {
+        let compact_block = CompactBlock::try_from(&proposal.block).unwrap();
+        let block_hash = compact_block.crypt_hash();
 
-            let mut votes = Vec::new();
-            for (sender, vote_message) in proposal.clone().lock_votes.unwrap().votes_by_sender {
-                let mut vote = ProtoVote::new();
-                if vote_message.proposal.is_none() {
-                    continue;
+        let compact_proposal = {
+            let mut compact_proposal = CompactProposal::new();
+            compact_proposal.set_block(compact_block);
+            compact_proposal.set_round(self.round as u64);
+            compact_proposal.set_height(self.height as u64);
+            if let Some(lock_round) = proposal.lock_round {
+                let mut votes = Vec::new();
+                for (sender, vote_message) in proposal.clone().lock_votes.unwrap().votes_by_sender {
+                    let mut vote = ProtoVote::new();
+                    if vote_message.proposal.is_none() {
+                        continue;
+                    }
+                    vote.set_proposal(vote_message.proposal.unwrap().to_vec());
+                    vote.set_sender(sender.to_vec());
+                    vote.set_signature(vote_message.signature.to_vec());
+                    votes.push(vote);
                 }
-                vote.set_proposal(vote_message.proposal.unwrap().to_vec());
-                vote.set_sender(sender.to_vec());
-                vote.set_signature(vote_message.signature.to_vec());
-                votes.push(vote);
+
+                compact_proposal.set_islock(true);
+                compact_proposal.set_lock_round(lock_round as u64);
+                compact_proposal.set_lock_votes(votes.into());
+            } else {
+                compact_proposal.set_islock(false);
             }
+            compact_proposal
+        };
 
-            proto_proposal.set_lock_votes(votes.into());
-        }
+        let compact_signed_proposal = {
+            let mut signed_proposal = CompactSignedProposal::new();
+            let message: Vec<u8> = (&compact_proposal).try_into().unwrap();
+            let author = &self.params.signer;
+            let hash = message.crypt_hash();
+            let signature = Signature::sign(author.keypair.privkey(), &hash).unwrap();
+            trace!(
+                "pub_proposal {} hash: {}, signature: {}",
+                self,
+                hash,
+                signature
+            );
+            signed_proposal.set_proposal(compact_proposal);
+            signed_proposal.set_signature(signature.to_vec());
+            signed_proposal
+        };
 
-        let message: Vec<u8> = (&proto_proposal).try_into().unwrap();
-        let author = &self.params.signer;
-        let hash = message.crypt_hash();
-        let signature = Signature::sign(author.keypair.privkey(), &hash).unwrap();
-        trace!(
-            "pub_proposal {} hash: {}, signature: {}",
-            self,
-            hash,
-            signature
-        );
-        let mut signed_proposal = SignedProposal::new();
-        signed_proposal.set_proposal(proto_proposal);
-        signed_proposal.set_signature(signature.to_vec());
+        if let Some(block) = self.verified_blocks.get(&block_hash) {
+            // Send SignedProposal to executor.
+            let signed_proposal = compact_signed_proposal
+                .clone()
+                .complete(block.get_body().get_transactions().to_vec());
+            let msg: Message = signed_proposal.into();
+            self.pub_sender
+                .send((
+                    routing_key!(Consensus >> SignedProposal).into(),
+                    msg.try_into().unwrap(),
+                ))
+                .unwrap();
+        };
 
-        let msg: Message = signed_proposal.into();
+        // Send CompactSignedProposal to nextwork.
+        let msg: Message = compact_signed_proposal.into();
         let bmsg: Vec<u8> = (&msg).try_into().unwrap();
         self.pub_sender
             .send((
-                routing_key!(Consensus >> SignedProposal).into(),
+                routing_key!(Consensus >> CompactSignedProposal).into(),
                 msg.try_into().unwrap(),
             ))
             .unwrap();
@@ -416,7 +432,7 @@ impl Bft {
                             let mut clean_flag = true;
                             let op = self.proposals.get_proposal(height, round);
                             if op.is_some() {
-                                let pro_block = Block::try_from(&op.unwrap().block);
+                                let pro_block = CompactBlock::try_from(&op.unwrap().block);
                                 if let Ok(block) = pro_block {
                                     let bhash: H256 = block.crypt_hash();
                                     if bhash == *hash {
@@ -461,10 +477,10 @@ impl Bft {
         n == self.auth_manage.validator_n()
     }
 
-    fn get_proposal_verified_result(&self, height: usize, round: usize) -> VerifiedProposalStatus {
+    fn get_proposal_verified_result(&self, height: usize, round: usize) -> VerifiedBlockStatus {
         self.unverified_msg
             .get(&(height, round))
-            .map_or(VerifiedProposalStatus::Ok, |res| res.1)
+            .map_or(VerifiedBlockStatus::Ok, |res| res.1)
     }
 
     fn pre_proc_precommit(&mut self) -> bool {
@@ -481,11 +497,11 @@ impl Bft {
             }
         }
         //polc is ok,but not verified , not send precommit
-        if lock_ok && verify_ok == VerifiedProposalStatus::Undo {
+        if lock_ok && verify_ok == VerifiedBlockStatus::Undo {
             return false;
         }
 
-        if lock_ok && verify_ok == VerifiedProposalStatus::Ok {
+        if lock_ok && verify_ok == VerifiedBlockStatus::Ok {
             self.pub_and_broadcast_message(height, round, Step::Precommit, proposal);
         } else {
             self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
@@ -601,7 +617,11 @@ impl Bft {
         if self.height == height && self.round == round {
             if let Some(cround) = self.last_commit_round {
                 if cround == round && self.proposal.is_some() {
-                    return self.commit_block();
+                    let ret = self.commit_block();
+                    if ret {
+                        self.verified_blocks.clear();
+                    }
+                    return ret;
                 }
             }
         }
@@ -692,14 +712,13 @@ impl Bft {
         trace!("commit_block {:?} begin", self);
         if let Some(hash) = self.proposal {
             if self.locked_block.is_some() {
-                //generate proof
-                let mut get_proof = Some(self.proof.clone());
+                let gen_flag = self.proof.height != height;
 
-                let gen_flag = if self.proof.height != height {
-                    get_proof = self.generate_proof(height, round, hash);
-                    true
+                //generate proof
+                let get_proof = if gen_flag {
+                    self.generate_proof(height, round, hash)
                 } else {
-                    false
+                    Some(self.proof.clone())
                 };
 
                 if let Some(proof) = get_proof {
@@ -708,20 +727,26 @@ impl Bft {
                     }
                     self.save_wal_proof(height + 1);
 
-                    let mut proof_blk = BlockWithProof::new();
-                    let blk = self.locked_block.clone();
-                    proof_blk.set_blk(blk.unwrap());
-                    proof_blk.set_proof(proof.into());
+                    let locked_block = self.locked_block.clone().unwrap();
+                    let locked_block_hash = locked_block.crypt_hash();
 
-                    // saved for retranse blockwithproof to chain
-                    self.block_proof = Some((height, proof_blk.clone()));
-                    info!(
-                        "commit_block {} consensus time {:?}",
-                        self,
-                        Instant::now() - self.htime
-                    );
-                    self.pub_block(&proof_blk);
-                    return true;
+                    if let Some(proposal_block) = self.verified_blocks.get(&locked_block_hash) {
+                        let mut proof_blk = BlockWithProof::new();
+                        proof_blk.set_blk(proposal_block.clone());
+                        proof_blk.set_proof(proof.into());
+
+                        // saved for retranse blockwithproof to chain
+                        self.block_proof = Some((height, proof_blk.clone()));
+                        info!(
+                            "commit_block {} consensus time {:?} proposal {} locked block hash {}",
+                            self,
+                            Instant::now() - self.htime,
+                            hash,
+                            locked_block_hash,
+                        );
+                        self.pub_block(&proof_blk);
+                        return true;
+                    }
                 } else {
                     info!("commit_block {} proof is not ok", self);
                     return false;
@@ -927,7 +952,7 @@ impl Bft {
     fn proc_proposal(&mut self, height: usize, round: usize) -> bool {
         let proposal = self.proposals.get_proposal(height, round);
         if let Some(proposal) = proposal {
-            trace!("proc_proposal {} begin h: {}, r: {}", self, height, round,);
+            trace!("proc_proposal {} begin h: {}, r: {}", self, height, round);
             if !proposal.check(height, &self.auth_manage.validators) {
                 warn!("proc proposal check authorities error");
                 return false;
@@ -935,7 +960,7 @@ impl Bft {
             //height 1's block not have prehash
             if let Some(hash) = self.pre_hash {
                 //prehash : self.prehash vs  proposal's block's prehash
-                let block = Block::try_from(&proposal.block).unwrap();
+                let block = CompactBlock::try_from(&proposal.block).unwrap();
                 let mut block_prehash = Vec::new();
                 block_prehash.extend_from_slice(block.get_header().get_prevhash());
                 {
@@ -1000,20 +1025,20 @@ impl Bft {
                 trace!("proc_proposal still have locked block {:?}", self);
             } else {
                 // else use proposal block，self.lock_round is none
-                let block = Block::try_from(&proposal.block).unwrap();
-                let block_hash = block.crypt_hash();
+                let compact_block = CompactBlock::try_from(&proposal.block).unwrap();
+                let block_hash = compact_block.crypt_hash();
                 self.proposal = Some(block_hash);
                 debug!("proc_proposal save the proposal's hash {:?}", self);
-                self.locked_block = Some(block);
+                self.locked_block = Some(compact_block);
             }
             return true;
         }
         false
     }
 
-    fn verify_version(&self, block: &Block) -> bool {
+    fn verify_version(&self, block: &CompactBlock) -> bool {
         if self.version.is_none() {
-            warn!("verify_version {} self.version is none", self,);
+            warn!("verify_version {} self.version is none", self);
             return false;
         }
         let version = self.version.unwrap();
@@ -1024,68 +1049,46 @@ impl Bft {
                 block.get_version(),
                 version
             );
-            return false;
+            false
+        } else {
+            true
         }
-        let transactions = block.get_body().get_transactions();
-        let len = transactions.len();
-        if len == 0 {
-            return true;
-        }
-        transactions.into_iter().all(|tx| {
-            let raw_tx = tx.get_transaction();
-            let result = verify_tx_version(raw_tx, version);
-            if !result {
-                warn!(
-                    "verify_version {} failed, tx version: {}, current chain version: {}",
-                    self,
-                    raw_tx.get_version(),
-                    version
-                );
-            }
-            result
-        })
     }
 
-    fn verify_req(&mut self, origin: Origin, block: &Block, vheight: usize, vround: usize) -> bool {
-        let transactions = block.get_body().get_transactions();
-        if transactions.is_empty() {
+    fn verify_req(
+        &mut self,
+        csp_msg: Message,
+        compact_block: &CompactBlock,
+        vheight: usize,
+        vround: usize,
+    ) -> bool {
+        let tx_hashes = compact_block.get_body().get_tx_hashes();
+        if tx_hashes.is_empty() {
+            self.verified_blocks.insert(
+                compact_block.crypt_hash(),
+                compact_block.clone().complete(Vec::new()),
+            );
             return true;
         }
-        let verify_ok = block.check_hash() && transactions.into_iter().all(|tx| {
-            let raw_tx = tx.get_transaction();
-            let result = verify_tx(raw_tx, vheight as u64);
-            if !result {
-                warn!(
-                    "verify_req {} verify tx in proposal failed, tx {{ nonce: {}, valid_until_block: {} }}, proposal h: {}, r: {}",
-                    self,
-                    raw_tx.get_nonce(),
-                    raw_tx.get_valid_until_block(),
-                    vheight, vround
-                );
-            }
-            result
-        });
+        let verify_ok = compact_block.check_hash();
         if verify_ok {
-            let reqid = gen_reqid_from_idx(vheight as u64, vround as u64);
-            let verify_req = block.block_verify_req(reqid);
-            trace!(
-                "verify_req {} send block with {} txs; h: {}, r: {}, id: {}",
-                self,
-                transactions.len(),
-                vheight,
-                vround,
-                reqid,
-            );
+            let verify_req = {
+                let mut verify_req = auth::VerifyBlockReq::new();
+                verify_req.set_height(vheight as u64);
+                verify_req.set_round(vround as u64);
+                verify_req.set_block(compact_block.clone());
+                verify_req
+            };
             let mut msg: Message = verify_req.into();
-            msg.set_origin(origin);
+            msg.set_origin(csp_msg.get_origin());
             self.pub_sender
                 .send((
                     routing_key!(Consensus >> VerifyBlockReq).into(),
-                    (&msg).try_into().unwrap(),
+                    msg.clone().try_into().unwrap(),
                 ))
                 .unwrap();
             self.unverified_msg
-                .insert((vheight, vround), (msg, VerifiedProposalStatus::Undo));
+                .insert((vheight, vround), (csp_msg, VerifiedBlockStatus::Undo));
         }
         verify_ok
     }
@@ -1102,29 +1105,27 @@ impl Bft {
             wal_flag,
             need_verify
         );
-        // compatibility with v0.20.x
-        let result = Message::try_from(body)
-            .ok()
-            .and_then(|mut msg| msg.take_signed_proposal().map(|p| (p, msg.get_origin())))
-            .or_else(|| {
-                SignedProposal::try_from(body)
-                    .ok()
-                    .map(|p| (p, ZERO_ORIGIN))
-            });
-        if let Some((signed_proposal, origin)) = result {
-            let signature = signed_proposal.get_signature();
-            if signature.len() != SIGNATURE_BYTES_LEN {
-                return Err(EngineError::InvalidSignature);
-            }
-            let signature = Signature::from(signature);
-
-            let proto_proposal = signed_proposal.get_proposal();
-            let message: Vec<u8> = proto_proposal.try_into().unwrap();
+        let csp_msg = if let Ok(csp_msg) = Message::try_from(body) {
+            csp_msg
+        } else {
+            return Err(EngineError::UnexpectedMessage);
+        };
+        let result = csp_msg.clone().take_compact_signed_proposal();
+        if let Some(compact_signed_proposal) = result {
+            let signature = {
+                let signature = compact_signed_proposal.get_signature();
+                if signature.len() != SIGNATURE_BYTES_LEN {
+                    return Err(EngineError::InvalidSignature);
+                }
+                Signature::from(signature)
+            };
+            let compact_proposal = compact_signed_proposal.get_proposal().clone();
+            let message: Vec<u8> = (&compact_proposal).try_into().unwrap();
             let hash = message.crypt_hash();
             trace!("handle_proposal {} message {:?}", self, hash);
             if let Ok(pubkey) = signature.recover(&hash) {
-                let height = proto_proposal.get_height() as usize;
-                let round = proto_proposal.get_round() as usize;
+                let height = compact_proposal.get_height() as usize;
+                let round = compact_proposal.get_round() as usize;
                 if height < self.height
                     || (height == self.height && round < self.round)
                     || (height == self.height
@@ -1142,9 +1143,9 @@ impl Bft {
                     round,
                     pubkey_to_address(&pubkey)
                 );
-                let block = proto_proposal.clone().take_block();
+                let compact_block = compact_proposal.clone().take_block();
 
-                if need_verify && !self.verify_req(origin, &block, height, round) {
+                if need_verify && !self.verify_req(csp_msg, &compact_block, height, round) {
                     warn!("handle_proposal {} verify_req is error", self);
                     return Err(EngineError::InvalidTxInProposal);
                 }
@@ -1163,12 +1164,12 @@ impl Bft {
                         "handle_proposal {} add proposal h: {}, r: {}",
                         self, height, round
                     );
-                    let blk = block.try_into().unwrap();
+                    let blk = compact_block.try_into().unwrap();
                     let mut lock_round = None;
-                    let lock_votes = if proto_proposal.get_islock() {
-                        lock_round = Some(proto_proposal.get_lock_round() as usize);
+                    let lock_votes = if compact_proposal.get_islock() {
+                        lock_round = Some(compact_proposal.get_lock_round() as usize);
                         let mut vote_set = VoteSet::new();
-                        for vote in proto_proposal.get_lock_votes() {
+                        for vote in compact_proposal.get_lock_votes() {
                             vote_set.add(
                                 Address::from_slice(vote.get_sender()),
                                 &VoteMessage {
@@ -1233,16 +1234,15 @@ impl Bft {
 
     pub fn new_proposal(&mut self) {
         let proposal = if let Some(lock_round) = self.lock_round {
-            let lock_blk = &self.locked_block;
+            let lock_block = self.locked_block.clone().unwrap();
             let lock_vote = &self.locked_vote;
-            let lock_blk = lock_blk.clone().unwrap();
             {
-                let lock_blk_hash = lock_blk.crypt_hash();
-                self.proposal = Some(lock_blk_hash);
+                let lock_block_hash = lock_block.crypt_hash();
+                self.proposal = Some(lock_block_hash);
                 info!("new_proposal proposal lock block {:?}", self);
             }
-            let blk = lock_blk.try_into().unwrap();
-            trace!("new_proposal {} proposer vote locked block", self,);
+            let blk = lock_block.try_into().unwrap();
+            trace!("new_proposal {} proposer vote locked block", self);
             Proposal {
                 block: blk,
                 lock_round: Some(lock_round),
@@ -1319,9 +1319,10 @@ impl Bft {
             );
             {
                 self.proposal = Some(bh);
-                self.locked_block = Some(block.clone());
+                self.locked_block = Some(block.clone().compact());
             }
-            let blk = block.try_into().unwrap();
+            let blk = block.clone().compact().try_into().unwrap();
+            self.verified_blocks.insert(bh, block);
             trace!(
                 "new_proposal {} pub proposal proposor vote myslef in not locked",
                 self
@@ -1400,14 +1401,29 @@ impl Bft {
                 });
             }
         } else if tminfo.step == Step::PrecommitAuth {
-            if let Some((msg, res)) = self.unverified_msg.get(&(tminfo.height, tminfo.round)) {
-                if *res == VerifiedProposalStatus::Undo {
+            if let Some((csp_msg, res)) = self.unverified_msg.get(&(tminfo.height, tminfo.round)) {
+                if *res == VerifiedBlockStatus::Undo {
+                    let verify_req = csp_msg
+                        .clone()
+                        .take_compact_signed_proposal()
+                        .unwrap()
+                        .create_verify_block_req();
+                    let mut msg: Message = verify_req.into();
+                    msg.set_origin(csp_msg.get_origin());
                     self.pub_sender
                         .send((
                             routing_key!(Consensus >> VerifyBlockReq).into(),
                             msg.try_into().unwrap(),
                         ))
                         .unwrap();
+                    let now = Instant::now();
+                    let _ = self.timer_seter.send(TimeoutInfo {
+                        timeval: now
+                            + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
+                        height: tminfo.height,
+                        round: tminfo.round,
+                        step: Step::PrecommitAuth,
+                    });
                 } else {
                     warn!("already get verified resutl {:?}", *res);
                 }
@@ -1448,7 +1464,7 @@ impl Bft {
         let snapshot = !self.get_snapshot();
         if from_broadcast && self.consensus_power && snapshot {
             match rtkey {
-                routing_key!(Net >> SignedProposal) => {
+                routing_key!(Net >> CompactSignedProposal) => {
                     let res = self.handle_proposal(&body[..], true, true);
                     if let Ok((h, r)) = res {
                         trace!(
@@ -1533,31 +1549,35 @@ impl Bft {
 
                 routing_key!(Auth >> VerifyBlockResp) => {
                     let resp = msg.take_verify_block_resp().unwrap();
-                    let verify_id = resp.get_id();
-                    let (vheight, vround) = get_idx_from_reqid(verify_id);
-                    let vheight = vheight as usize;
-                    let vround = vround as usize;
 
-                    let verify_res = if resp.get_ret() == auth::Ret::OK {
-                        VerifiedProposalStatus::Ok
+                    let block = resp.get_block();
+                    let vheight = resp.get_height() as usize;
+                    let vround = resp.get_round() as usize;
+
+                    let verify_res = if resp.get_pass() {
+                        self.verified_blocks
+                            .insert(block.crypt_hash(), block.clone());
+                        VerifiedBlockStatus::Ok
                     } else {
-                        VerifiedProposalStatus::Failed
+                        VerifiedBlockStatus::Failed
                     };
 
                     if let Some(res) = self.unverified_msg.get_mut(&(vheight, vround)) {
                         res.1 = verify_res;
+                        let block_bytes: Vec<u8> = block.try_into().unwrap();
                         let msg =
-                            serialize(&(vheight, vround, verify_res as i8), Infinite).unwrap();
-                        let _ = self.wal_log.save(vheight, LogType::VerifiedPropose, &msg);
+                            serialize(&(vheight, vround, verify_res as i8, block_bytes), Infinite)
+                                .unwrap();
+                        let _ = self.wal_log.save(vheight, LogType::VerifiedBlock, &msg);
                     };
 
                     info!(
-                        "process {} recieve VerifyBlockResp verify_id: {}, h: {}, r: {}, resp: {:?}",
-                        self, verify_id, vheight, vround, verify_res
+                        "process {} recieve Auth VerifyBlockResp h: {}, r: {}, resp: {:?}",
+                        self, vheight, vround, verify_res,
                     );
                     if vheight == self.height && vround == self.round {
                         //verify not ok,so clean the proposal info
-                        if verify_res == VerifiedProposalStatus::Ok {
+                        if verify_res == VerifiedBlockStatus::Ok {
                             if self.step == Step::PrecommitAuth && self.pre_proc_precommit() {
                                 self.change_state_step(vheight, vround, Step::Precommit, false);
                                 self.proc_precommit(vheight, vround);
@@ -1842,6 +1862,8 @@ impl Bft {
                 }
                 self.change_state_step(height, round + 1, Step::Propose, true);
                 self.new_round_start(height, round + 1);
+            } else {
+                self.verified_blocks.clear();
             }
         } else if self.step == Step::CommitWait {
         }
@@ -1895,8 +1917,27 @@ impl Bft {
                     trace!("load_wal_log {} LogType::VerifiedPropose begin", self);
                     if let Ok(decode) = deserialize(&vec_out) {
                         let (vheight, vround, verified): (usize, usize, i8) = decode;
-                        let status: VerifiedProposalStatus = verified.into();
-                        if status == VerifiedProposalStatus::Ok {
+                        let status: VerifiedBlockStatus = verified.into();
+                        if status == VerifiedBlockStatus::Ok {
+                            self.unverified_msg.remove(&(vheight, vround));
+                        } else {
+                            self.clean_saved_info();
+                        }
+                    }
+                }
+                LogType::VerifiedBlock => {
+                    trace!(" LogType::VerifiedBlock begining!");
+                    if let Ok(decode) = deserialize(&vec_out) {
+                        let (vheight, vround, verified, bytes): (
+                            usize,
+                            usize,
+                            i8,
+                            Vec<u8>,
+                        ) = decode;
+                        let status: VerifiedBlockStatus = verified.into();
+                        let block: Block = (&bytes).try_into().unwrap();
+                        if status == VerifiedBlockStatus::Ok {
+                            self.verified_blocks.insert(block.crypt_hash(), block);
                             self.unverified_msg.remove(&(vheight, vround));
                         } else {
                             self.clean_saved_info();
