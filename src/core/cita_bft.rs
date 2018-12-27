@@ -146,6 +146,7 @@ pub struct Bft {
     block_txs: VecDeque<(usize, BlockTxs)>,
     block_proof: Option<(usize, BlockWithProof)>,
 
+    // The verified blocks with the bodies of transactions.
     verified_blocks: HashMap<H256, Block>,
 
     // when snaphsot restore, clear wal data
@@ -333,6 +334,7 @@ impl Bft {
             signed_proposal
         };
 
+        // If consensus has the full verified block, then send it to executor.
         if let Some(block) = self.verified_blocks.get(&block_hash) {
             // Send SignedProposal to executor.
             let signed_proposal = compact_signed_proposal
@@ -730,6 +732,8 @@ impl Bft {
                     let locked_block = self.locked_block.clone().unwrap();
                     let locked_block_hash = locked_block.crypt_hash();
 
+                    // The self.locked_block is a compact block.
+                    // So, fetch the bodies of transactions from self.verified_blocks.
                     if let Some(proposal_block) = self.verified_blocks.get(&locked_block_hash) {
                         let mut proof_blk = BlockWithProof::new();
                         proof_blk.set_blk(proposal_block.clone());
@@ -1024,7 +1028,7 @@ impl Bft {
                 self.proposal = Some(lock_block.crypt_hash());
                 trace!("proc_proposal still have locked block {:?}", self);
             } else {
-                // else use proposal block，self.lock_round is none
+                // else use proposal block, self.lock_round is none
                 let compact_block = CompactBlock::try_from(&proposal.block).unwrap();
                 let block_hash = compact_block.crypt_hash();
                 self.proposal = Some(block_hash);
@@ -1063,6 +1067,7 @@ impl Bft {
         vround: usize,
     ) -> bool {
         let tx_hashes = compact_block.get_body().get_tx_hashes();
+        // If there is no transaction, the block don't have to be verified.
         if tx_hashes.is_empty() {
             self.verified_blocks.insert(
                 compact_block.crypt_hash(),
@@ -1322,6 +1327,7 @@ impl Bft {
                 self.locked_block = Some(block.clone().compact());
             }
             let blk = block.clone().compact().try_into().unwrap();
+            // If we publish a proposal block, the block is verified by auth, already.
             self.verified_blocks.insert(bh, block);
             trace!(
                 "new_proposal {} pub proposal proposor vote myslef in not locked",
@@ -1401,6 +1407,8 @@ impl Bft {
                 });
             }
         } else if tminfo.step == Step::PrecommitAuth {
+            // If consensus doesn't receive the result of block verification in a specific
+            // time-frame, use the original message to construct a request, then resend it to auth.
             if let Some((csp_msg, res)) = self.unverified_msg.get(&(tminfo.height, tminfo.round)) {
                 if *res == VerifiedBlockStatus::Undo {
                     let verify_req = csp_msg
@@ -1555,6 +1563,7 @@ impl Bft {
                     let vround = resp.get_round() as usize;
 
                     let verify_res = if resp.get_pass() {
+                        // Save the verified block which has passed verification by the auth.
                         self.verified_blocks
                             .insert(block.crypt_hash(), block.clone());
                         VerifiedBlockStatus::Ok
