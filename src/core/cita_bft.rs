@@ -1569,6 +1569,20 @@ impl Bft {
                             serialize(&(vheight, vround, verify_res as i8, block_bytes), Infinite)
                                 .unwrap();
                         let _ = self.wal_log.save(vheight, LogType::VerifiedBlock, &msg);
+                        // Send SignedProposal to executor.
+                        if let Some(compact_signed_proposal) =
+                            res.0.clone().take_compact_signed_proposal()
+                        {
+                            let signed_proposal = compact_signed_proposal
+                                .complete(block.get_body().get_transactions().to_vec());
+                            let msg: Message = signed_proposal.into();
+                            self.pub_sender
+                                .send((
+                                    routing_key!(Consensus >> SignedProposal).into(),
+                                    msg.try_into().unwrap(),
+                                ))
+                                .unwrap();
+                        }
                     };
 
                     info!(
