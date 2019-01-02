@@ -251,7 +251,7 @@ dependencies = [
  "libproto 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "logger 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "lru-cache 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "min-max-heap 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "min-max-heap 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ntp 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "proof 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "pubsub 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
@@ -1131,7 +1131,7 @@ dependencies = [
 
 [[package]]
 name = "min-max-heap"
-version = "1.2.0"
+version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -2553,7 +2553,7 @@ dependencies = [
 "checksum memoffset 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0f9dc261e2b62d7a622bf416ea3c5245cdd5d9a7fcc428c0d06804dfce1775b3"
 "checksum merklehash 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum metadeps 1.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "73b122901b3a675fac8cecf68dcb2f0d3036193bc861d1ac0e1c337f7d5254c2"
-"checksum min-max-heap 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8e72ef7f2c0dff4f16a7165587c2342b8e397a9a0bb7c28a8ad3adeddfcbf7fe"
+"checksum min-max-heap 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "f4c4c98e56ed3027c65dd9a7d10bd0b7d8fbdf2f5769c2dd4ac91a79b896ed65"
 "checksum miniz-sys 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)" = "609ce024854aeb19a0ef7567d348aaa5a746b32fb72e336df7fcc16869d7e2b4"
 "checksum mio 0.6.16 (registry+https://github.com/rust-lang/crates.io-index)" = "71646331f2619b1026cc302f87a2b8b648d5c6dd6937846a16cc8ce0f347f432"
 "checksum mio-uds 0.6.7 (registry+https://github.com/rust-lang/crates.io-index)" = "966257a94e196b11bb43aca423754d87429960a768de9414f3691d6957abf125"
