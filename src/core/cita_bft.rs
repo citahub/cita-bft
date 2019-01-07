@@ -36,7 +36,7 @@ use libproto::{auth, Message};
 use proof::BftProof;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
-use std::sync::mpsc::{Receiver, RecvError, Sender};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use cita_directories::DataPath;
@@ -53,6 +53,11 @@ const TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE: u32 = 20;
 
 pub type TransType = (String, Vec<u8>);
 pub type PubType = (String, Vec<u8>);
+
+pub enum BftTurn {
+    Message(TransType),
+    Timeout(TimeoutInfo),
+}
 
 #[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
 enum VerifiedBlockStatus {
@@ -116,10 +121,8 @@ impl ::std::fmt::Display for Step {
 
 pub struct Bft {
     pub_sender: Sender<PubType>,
-    pub_receiver: Receiver<TransType>,
-
     timer_seter: Sender<TimeoutInfo>,
-    timer_notify: Receiver<TimeoutInfo>,
+    receiver: Receiver<BftTurn>,
 
     params: BftParams,
     height: usize,
@@ -197,9 +200,8 @@ impl ::std::fmt::Display for Bft {
 impl Bft {
     pub fn new(
         s: Sender<PubType>,
-        r: Receiver<TransType>,
         ts: Sender<TimeoutInfo>,
-        rs: Receiver<TimeoutInfo>,
+        r: Receiver<BftTurn>,
         params: BftParams,
     ) -> Bft {
         let proof = BftProof::default();
@@ -207,9 +209,8 @@ impl Bft {
         let logpath = DataPath::wal_path();
         Bft {
             pub_sender: s,
-            pub_receiver: r,
             timer_seter: ts,
-            timer_notify: rs,
+            receiver: r,
 
             params,
             height: 0,
@@ -1992,28 +1993,14 @@ impl Bft {
         }
 
         loop {
-            let mut gtm = Err(RecvError);
-            let mut ginfo = Err(RecvError);
-
-            {
-                let tn = &self.timer_notify;
-                let pn = &self.pub_receiver;
-                select!{
-                    tm = tn.recv() => {
-                        gtm = tm;
-                    },
-                    info = pn.recv() => {
-                        ginfo = info;
-                    }
+            match self.receiver.try_recv() {
+                Ok(BftTurn::Timeout(tm)) => {
+                    self.timeout_process(&tm);
                 }
-            }
-
-            if let Ok(oktm) = gtm {
-                self.timeout_process(&oktm);
-            }
-
-            if let Ok(tinfo) = ginfo {
-                self.process(tinfo);
+                Ok(BftTurn::Message(info)) => {
+                    self.process(info);
+                }
+                _ => {}
             }
         }
     }

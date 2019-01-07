@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use core::cita_bft::Step;
+use core::cita_bft::{BftTurn, Step};
 use min_max_heap::MinMaxHeap;
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -50,11 +50,11 @@ impl ::std::fmt::Debug for TimeoutInfo {
 
 pub struct WaitTimer {
     timer_seter: Receiver<TimeoutInfo>,
-    timer_notify: Sender<TimeoutInfo>,
+    timer_notify: Sender<BftTurn>,
 }
 
 impl WaitTimer {
-    pub fn new(ts: Sender<TimeoutInfo>, rs: Receiver<TimeoutInfo>) -> WaitTimer {
+    pub fn new(ts: Sender<BftTurn>, rs: Receiver<TimeoutInfo>) -> WaitTimer {
         WaitTimer {
             timer_notify: ts,
             timer_seter: rs,
@@ -93,7 +93,9 @@ impl WaitTimer {
                 // if some timers are set as the same time, send timeout messages and pop them
                 while !timer_heap.is_empty() && now >= timer_heap.peek_min().cloned().unwrap() {
                     self.timer_notify
-                        .send(timeout_info.remove(&timer_heap.pop_min().unwrap()).unwrap())
+                        .send(BftTurn::Timeout(
+                            timeout_info.remove(&timer_heap.pop_min().unwrap()).unwrap(),
+                        ))
                         .unwrap();
                 }
             }
