@@ -45,7 +45,6 @@
 //!     | consensus | Consensus | Snapshot        | SnapshotResp          |
 //!
 
-#![feature(mpsc_select)]
 #![feature(try_from)]
 #![feature(tool_lints)]
 
@@ -81,7 +80,7 @@ use std::sync::mpsc::channel;
 use std::thread;
 
 mod core;
-use core::cita_bft::Bft;
+use core::cita_bft::{Bft, BftTurn};
 use core::params::{BftParams, Config, PrivateKey};
 use core::votetime::WaitTimer;
 use cpuprofiler::PROFILER;
@@ -157,15 +156,17 @@ fn main() {
 
     // timer module
     let (main2timer, timer4main) = channel();
-    let (timer2main, main4timer) = channel();
-    let timethd = thread::spawn(move || {
-        let wt = WaitTimer::new(timer2main, timer4main);
-        wt.start();
-    });
+    let (sender, receiver) = channel();
+    let timethd = {
+        let sender = sender.clone();
+        thread::spawn(move || {
+            let wt = WaitTimer::new(sender, timer4main);
+            wt.start();
+        })
+    };
 
     // mq pubsub module
     let threadpool = threadpool::ThreadPool::new(THREAD_POOL_NUM);
-    let (mq2main, main4mq) = channel();
     let (tx_sub, rx_sub) = channel();
     let (tx_pub, rx_pub) = channel();
     start_pubsub(
@@ -183,10 +184,10 @@ fn main() {
     );
     thread::spawn(move || loop {
         let (key, body) = rx_sub.recv().unwrap();
-        let tx = mq2main.clone();
         let pool = threadpool.clone();
+        let tx = sender.clone();
         pool.execute(move || {
-            tx.send((key, body)).unwrap();
+            tx.send(BftTurn::Message((key, body))).unwrap();
         });
     });
 
@@ -197,7 +198,7 @@ fn main() {
     // main cita-bft loop module
     let params = BftParams::new(&pk);
     let mainthd = thread::spawn(move || {
-        let mut engine = Bft::new(tx_pub, main4mq, main2timer, main4timer, params);
+        let mut engine = Bft::new(tx_pub, main2timer, receiver, params);
         engine.start();
     });
 
