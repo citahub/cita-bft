@@ -45,9 +45,6 @@
 //!     | consensus | Consensus | Snapshot        | SnapshotResp          |
 //!
 
-#![feature(try_from)]
-#![feature(tool_lints)]
-
 extern crate authority_manage;
 extern crate bincode;
 extern crate cita_crypto as crypto;

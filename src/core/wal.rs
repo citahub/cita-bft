@@ -58,7 +58,7 @@ pub struct Wal {
 }
 
 impl Wal {
-    pub fn new(dir: &str) -> Result<Wal, io::Error> {
+    pub fn create(dir: &str) -> Result<Wal, io::Error> {
         let fss = read_dir(&dir);
         if fss.is_err() {
             DirBuilder::new().recursive(true).create(dir).unwrap();
