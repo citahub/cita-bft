@@ -20,9 +20,9 @@ use bincode::{serialize, Infinite};
 use crypto::{pubkey_to_address, Sign, Signature};
 use hashable::Hashable;
 use libproto::blockchain::CompactBlock;
+use libproto::TryFrom;
 use lru_cache::LruCache;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use types::{Address, H256};
 
 // height -> round collector

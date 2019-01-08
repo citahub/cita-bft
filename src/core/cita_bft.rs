@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::convert::{Into, TryFrom, TryInto};
+use std::convert::Into;
 
 use authority_manage::AuthorityManage;
 use bincode::{deserialize, serialize, Infinite};
@@ -33,6 +33,7 @@ use libproto::consensus::{CompactProposal, CompactSignedProposal, Vote as ProtoV
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
+use libproto::{TryFrom, TryInto};
 use proof::BftProof;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
@@ -224,7 +225,7 @@ impl Bft {
             lock_round: None,
             locked_vote: None,
             locked_block: None,
-            wal_log: Wal::new(&*logpath).unwrap(),
+            wal_log: Wal::create(&*logpath).unwrap(),
             send_filter: HashMap::new(),
             last_commit_round: None,
             htime: Instant::now(),
@@ -1689,9 +1690,9 @@ impl Bft {
                     info!("[snapshot] receive cmd: Clear");
                     let walpath = DataPath::wal_path();
                     let tmp_path = DataPath::root_node_path() + "/wal_tmp";
-                    self.wal_log = Wal::new(&*tmp_path).unwrap();
+                    self.wal_log = Wal::create(&*tmp_path).unwrap();
                     let _ = fs::remove_dir_all(&walpath);
-                    self.wal_log = Wal::new(&*walpath).unwrap();
+                    self.wal_log = Wal::create(&*walpath).unwrap();
                     let _ = fs::remove_dir_all(&tmp_path);
 
                     self.is_cleared = true;
@@ -1952,14 +1953,10 @@ impl Bft {
                 LogType::VerifiedBlock => {
                     trace!(" LogType::VerifiedBlock begining!");
                     if let Ok(decode) = deserialize(&vec_out) {
-                        let (vheight, vround, verified, bytes): (
-                            usize,
-                            usize,
-                            i8,
-                            Vec<u8>,
-                        ) = decode;
+                        let (vheight, vround, verified, bytes): (usize, usize, i8, Vec<u8>) =
+                            decode;
                         let status: VerifiedBlockStatus = verified.into();
-                        let block: Block = (&bytes).try_into().unwrap();
+                        let block = Block::try_from(&bytes).unwrap();
                         if status == VerifiedBlockStatus::Ok {
                             self.verified_blocks.insert(block.crypt_hash(), block);
                             self.unverified_msg.remove(&(vheight, vround));

@@ -1,6 +1,6 @@
 #!/bin/echo Warning: this file should be sourced!
 
-DOCKER_IMAGE="cita/cita-build:ubuntu-18.04-20181009"
+DOCKER_IMAGE="cita/cita-build:ubuntu-18.04-20190107"
 CARGO_HOME="/opt/.cargo"
 
 LOCAL_CARGO_HOME="${HOME}/.cargo"
