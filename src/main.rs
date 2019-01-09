@@ -67,7 +67,6 @@ extern crate pubsub;
 extern crate rustc_hex;
 #[macro_use]
 extern crate serde_derive;
-extern crate threadpool;
 extern crate time;
 #[macro_use]
 extern crate util;
@@ -86,8 +85,6 @@ use pubsub::start_pubsub;
 use std::thread::sleep;
 use std::time::Duration;
 use util::set_panic_handler;
-
-const THREAD_POOL_NUM: usize = 10;
 
 fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
     //start profiling
@@ -163,7 +160,6 @@ fn main() {
     };
 
     // mq pubsub module
-    let threadpool = threadpool::ThreadPool::new(THREAD_POOL_NUM);
     let (tx_sub, rx_sub) = channel();
     let (tx_pub, rx_pub) = channel();
     start_pubsub(
@@ -181,11 +177,8 @@ fn main() {
     );
     thread::spawn(move || loop {
         let (key, body) = rx_sub.recv().unwrap();
-        let pool = threadpool.clone();
         let tx = sender.clone();
-        pool.execute(move || {
-            tx.send(BftTurn::Message((key, body))).unwrap();
-        });
+        tx.send(BftTurn::Message((key, body))).unwrap();
     });
 
     let config = Config::new(config_path);
