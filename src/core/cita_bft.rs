@@ -1989,8 +1989,9 @@ impl Bft {
             self.redo_work();
         }
 
+        let wait_secs = ::std::time::Duration::from_secs(60);
         loop {
-            match self.receiver.try_recv() {
+            match self.receiver.recv_timeout(wait_secs) {
                 Ok(BftTurn::Timeout(tm)) => {
                     self.timeout_process(&tm);
                 }
