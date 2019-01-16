@@ -29,7 +29,9 @@ use core::wal::{LogType, Wal};
 use crypto::{pubkey_to_address, CreateKey, Sign, Signature, SIGNATURE_BYTES_LEN};
 use engine::{unix_now, AsMillis, EngineError, Mismatch};
 use libproto::blockchain::{Block, BlockTxs, BlockWithProof, CompactBlock, RichStatus};
-use libproto::consensus::{CompactProposal, CompactSignedProposal, Vote as ProtoVote};
+use libproto::consensus::{
+    CompactProposal, CompactSignedProposal, SignedProposal, Vote as ProtoVote,
+};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
@@ -1112,12 +1114,28 @@ impl Bft {
             wal_flag,
             need_verify
         );
-        let csp_msg = if let Ok(csp_msg) = Message::try_from(body) {
+        let mut hash_v0_20_x = None;
+        let mut csp_msg = if let Ok(csp_msg) = Message::try_from(body) {
             csp_msg
         } else {
             return Err(EngineError::UnexpectedMessage);
         };
-        let result = csp_msg.clone().take_compact_signed_proposal();
+        let result = csp_msg.clone().take_compact_signed_proposal().or_else(|| {
+            // Only process the old version proposals from wal
+            if !wal_flag {
+                SignedProposal::try_from(body)
+                    .ok()
+                    .and_then(|signed_proposal| {
+                        let message: Vec<u8> = signed_proposal.get_proposal().try_into().unwrap();
+                        // Calculate hash with full signed proposal
+                        hash_v0_20_x = Some(message.crypt_hash());
+                        csp_msg = signed_proposal.compact().into();
+                        csp_msg.clone().take_compact_signed_proposal()
+                    })
+            } else {
+                None
+            }
+        });
         if let Some(compact_signed_proposal) = result {
             let signature = {
                 let signature = compact_signed_proposal.get_signature();
@@ -1127,8 +1145,12 @@ impl Bft {
                 Signature::from(signature)
             };
             let compact_proposal = compact_signed_proposal.get_proposal().clone();
-            let message: Vec<u8> = (&compact_proposal).try_into().unwrap();
-            let hash = message.crypt_hash();
+            let hash = if let Some(hash) = hash_v0_20_x {
+                hash
+            } else {
+                let message: Vec<u8> = (&compact_proposal).try_into().unwrap();
+                message.crypt_hash()
+            };
             trace!("handle_proposal {} message {:?}", self, hash);
             if let Ok(pubkey) = signature.recover(&hash) {
                 let height = compact_proposal.get_height() as usize;
