@@ -1246,15 +1246,9 @@ impl Bft {
         }
     }
 
-    // use iter + cloned, do not copy all block_txs
     fn clean_block_txs(&mut self) {
         let height = self.height - 1;
-        self.block_txs = self
-            .block_txs
-            .iter()
-            .filter(|&&(hi, _)| hi >= height)
-            .cloned()
-            .collect();
+        self.block_txs.retain(|&(hi, _)| hi >= height);
     }
 
     fn clean_filter_info(&mut self) {
@@ -1289,15 +1283,21 @@ impl Bft {
 
             let mut flag = false;
 
-            for &(ref height, ref blocktxs) in &self.block_txs {
+            for &mut (height, ref mut blocktxs) in &mut self.block_txs {
                 trace!(
                     "new_proposal BLOCKTXS get height {}, self height {}",
-                    *height,
+                    height,
                     self.height
                 );
-                if *height == self.height - 1 {
+                if height == self.height - 1 {
                     flag = true;
-                    block.set_body(blocktxs.get_body().clone());
+                    // If any transaction couldn't verified, then the proposals which include it will
+                    // not verified.
+                    // So, block generation will be blocked.
+                    // Taking all transactions to avoid that.
+                    // Next turn when proposing a new proposal in the same height, this node will use
+                    // an empty block.
+                    block.set_body(blocktxs.take_body().clone());
                     break;
                 }
             }
@@ -1343,8 +1343,10 @@ impl Bft {
 
             let bh = block.crypt_hash();
             info!(
-                "new_proposal {} proposal new block: block hash {:?}",
-                self, bh
+                "new_proposal {} proposal new block with {} txs: block hash {:?}",
+                self,
+                block.get_body().get_transactions().len(),
+                bh
             );
             {
                 self.proposal = Some(bh);
@@ -1457,7 +1459,7 @@ impl Bft {
                         step: Step::PrecommitAuth,
                     });
                 } else {
-                    warn!("already get verified resutl {:?}", *res);
+                    warn!("already get verified result {:?}", *res);
                 }
             };
         } else if tminfo.step == Step::Precommit {
