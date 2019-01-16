@@ -1897,9 +1897,10 @@ impl Bft {
     fn load_wal_log(&mut self) {
         let vec_buf = self.wal_log.load();
         for (mtype, vec_out) in vec_buf {
-            trace!("load_wal_log {} type {}", self, mtype);
             let log_type: LogType = mtype.into();
+            trace!("load_wal_log {} type {:?}({})", self, log_type, mtype);
             match log_type {
+                LogType::Skip => {}
                 LogType::Propose => {
                     let res = self.handle_proposal(&vec_out[..], false, true);
                     if let Ok((h, r)) = res {
