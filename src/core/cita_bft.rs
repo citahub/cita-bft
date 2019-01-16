@@ -62,19 +62,43 @@ pub enum BftTurn {
     Timeout(TimeoutInfo),
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum VerifiedBlockStatus {
-    Ok = 1,
-    Failed = -1,
-    Undo = 0,
+    Ok,
+    Err,
+    Init(u8),
+}
+
+impl VerifiedBlockStatus {
+    pub fn value(self) -> i8 {
+        match self {
+            VerifiedBlockStatus::Ok => 1,
+            VerifiedBlockStatus::Err => -1,
+            VerifiedBlockStatus::Init(_) => 0,
+        }
+    }
+
+    pub fn is_ok(self) -> bool {
+        match self {
+            VerifiedBlockStatus::Ok => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_init(self) -> bool {
+        match self {
+            VerifiedBlockStatus::Init(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl From<i8> for VerifiedBlockStatus {
     fn from(s: i8) -> Self {
         match s {
             1 => VerifiedBlockStatus::Ok,
-            -1 => VerifiedBlockStatus::Failed,
-            0 => VerifiedBlockStatus::Undo,
+            -1 => VerifiedBlockStatus::Err,
+            0 => VerifiedBlockStatus::Init(0),
             _ => panic!("Invalid VerifiedBlockStatus."),
         }
     }
@@ -495,7 +519,7 @@ impl Bft {
         let proposal = self.proposal;
         let mut lock_ok = false;
 
-        let verify_ok = self.get_proposal_verified_result(height, round);
+        let verify_result = self.get_proposal_verified_result(height, round);
         if let Some(lround) = self.lock_round {
             trace!("pre_proc_precommit {} locked round {}", self, lround);
             if lround == round {
@@ -503,11 +527,11 @@ impl Bft {
             }
         }
         //polc is ok,but not verified , not send precommit
-        if lock_ok && verify_ok == VerifiedBlockStatus::Undo {
+        if lock_ok && verify_result.is_init() {
             return false;
         }
 
-        if lock_ok && verify_ok == VerifiedBlockStatus::Ok {
+        if lock_ok && verify_result.is_ok() {
             self.pub_and_broadcast_message(height, round, Step::Precommit, proposal);
         } else {
             self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
@@ -1097,7 +1121,7 @@ impl Bft {
                 ))
                 .unwrap();
             self.unverified_msg
-                .insert((vheight, vround), (csp_msg, VerifiedBlockStatus::Undo));
+                .insert((vheight, vround), (csp_msg, VerifiedBlockStatus::Init(0)));
         }
         verify_ok
     }
@@ -1253,6 +1277,16 @@ impl Bft {
 
     fn clean_filter_info(&mut self) {
         self.send_filter.clear();
+    }
+
+    fn clean_proposal_when_verify_failed(&mut self) {
+        let height = self.height;
+        let round = self.round;
+        self.clean_saved_info();
+        self.pub_and_broadcast_message(height, round, Step::Prevote, Some(H256::default()));
+        self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
+        self.change_state_step(height, round, Step::Precommit, false);
+        self.proc_precommit(height, round);
     }
 
     pub fn new_proposal(&mut self) {
@@ -1433,35 +1467,49 @@ impl Bft {
                 });
             }
         } else if tminfo.step == Step::PrecommitAuth {
+            let mut wait_too_many_times = false;
             // If consensus doesn't receive the result of block verification in a specific
             // time-frame, use the original message to construct a request, then resend it to auth.
-            if let Some((csp_msg, res)) = self.unverified_msg.get(&(tminfo.height, tminfo.round)) {
-                if *res == VerifiedBlockStatus::Undo {
-                    let verify_req = csp_msg
-                        .clone()
-                        .take_compact_signed_proposal()
-                        .unwrap()
-                        .create_verify_block_req();
-                    let mut msg: Message = verify_req.into();
-                    msg.set_origin(csp_msg.get_origin());
-                    self.pub_sender
-                        .send((
-                            routing_key!(Consensus >> VerifyBlockReq).into(),
-                            msg.try_into().unwrap(),
-                        ))
-                        .unwrap();
-                    let now = Instant::now();
-                    let _ = self.timer_seter.send(TimeoutInfo {
-                        timeval: now
-                            + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
-                        height: tminfo.height,
-                        round: tminfo.round,
-                        step: Step::PrecommitAuth,
-                    });
+            if let Some((csp_msg, result)) =
+                self.unverified_msg.get_mut(&(tminfo.height, tminfo.round))
+            {
+                if let VerifiedBlockStatus::Init(ref mut times) = *result {
+                    trace!("wait for the verification result {} times", times);
+                    if *times >= 3 {
+                        error!("do not wait for the verification result again");
+                        wait_too_many_times = true;
+                    } else {
+                        let verify_req = csp_msg
+                            .clone()
+                            .take_compact_signed_proposal()
+                            .unwrap()
+                            .create_verify_block_req();
+                        let mut msg: Message = verify_req.into();
+                        msg.set_origin(csp_msg.get_origin());
+                        self.pub_sender
+                            .send((
+                                routing_key!(Consensus >> VerifyBlockReq).into(),
+                                msg.try_into().unwrap(),
+                            ))
+                            .unwrap();
+                        let now = Instant::now();
+                        let _ = self.timer_seter.send(TimeoutInfo {
+                            timeval: now
+                                + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
+                            height: tminfo.height,
+                            round: tminfo.round,
+                            step: Step::PrecommitAuth,
+                        });
+                        *times += 1;
+                    };
                 } else {
-                    warn!("already get verified result {:?}", *res);
+                    warn!("already get verified result {:?}", *result);
                 }
             };
+            // If waited the result of verification for a long while, we consider it was failed.
+            if wait_too_many_times {
+                self.clean_proposal_when_verify_failed();
+            }
         } else if tminfo.step == Step::Precommit {
             /*in this case,need resend prevote : my net server can be connected but other node's
             server not connected when staring.  maybe my node receive enough vote(prevote),but others
@@ -1594,15 +1642,17 @@ impl Bft {
                             .insert(block.crypt_hash(), block.clone());
                         VerifiedBlockStatus::Ok
                     } else {
-                        VerifiedBlockStatus::Failed
+                        VerifiedBlockStatus::Err
                     };
 
                     if let Some(res) = self.unverified_msg.get_mut(&(vheight, vround)) {
                         res.1 = verify_res;
                         let block_bytes: Vec<u8> = block.try_into().unwrap();
-                        let msg =
-                            serialize(&(vheight, vround, verify_res as i8, block_bytes), Infinite)
-                                .unwrap();
+                        let msg = serialize(
+                            &(vheight, vround, verify_res.value(), block_bytes),
+                            Infinite,
+                        )
+                        .unwrap();
                         let _ = self.wal_log.save(vheight, LogType::VerifiedBlock, &msg);
                         // Send SignedProposal to executor.
                         if let Some(compact_signed_proposal) =
@@ -1626,27 +1676,13 @@ impl Bft {
                     );
                     if vheight == self.height && vround == self.round {
                         //verify not ok,so clean the proposal info
-                        if verify_res == VerifiedBlockStatus::Ok {
+                        if verify_res.is_ok() {
                             if self.step == Step::PrecommitAuth && self.pre_proc_precommit() {
                                 self.change_state_step(vheight, vround, Step::Precommit, false);
                                 self.proc_precommit(vheight, vround);
                             }
                         } else {
-                            self.clean_saved_info();
-                            self.pub_and_broadcast_message(
-                                vheight,
-                                vround,
-                                Step::Prevote,
-                                Some(H256::default()),
-                            );
-                            self.pub_and_broadcast_message(
-                                vheight,
-                                vround,
-                                Step::Precommit,
-                                Some(H256::default()),
-                            );
-                            self.change_state_step(vheight, vround, Step::Precommit, false);
-                            self.proc_precommit(vheight, vround);
+                            self.clean_proposal_when_verify_failed();
                         }
                     }
                 }
@@ -1828,7 +1864,7 @@ impl Bft {
 
         self.change_state_step(status_height, new_round, Step::CommitWait, false);
         info!(
-            "receive_new_status {} get new chain status h: {}, r: {}, cost time: {:?} ",
+            "receive_new_status {} get new chain status h: {}, r: {}, cost time: {:?}",
             self, status_height, new_round, cost_time
         );
         let now = Instant::now();
@@ -1968,7 +2004,7 @@ impl Bft {
                     if let Ok(decode) = deserialize(&vec_out) {
                         let (vheight, vround, verified): (usize, usize, i8) = decode;
                         let status: VerifiedBlockStatus = verified.into();
-                        if status == VerifiedBlockStatus::Ok {
+                        if status.is_ok() {
                             self.unverified_msg.remove(&(vheight, vround));
                         } else {
                             self.clean_saved_info();
@@ -1982,7 +2018,7 @@ impl Bft {
                             decode;
                         let status: VerifiedBlockStatus = verified.into();
                         let block = Block::try_from(&bytes).unwrap();
-                        if status == VerifiedBlockStatus::Ok {
+                        if status.is_ok() {
                             self.verified_blocks.insert(block.crypt_hash(), block);
                             self.unverified_msg.remove(&(vheight, vround));
                         } else {
