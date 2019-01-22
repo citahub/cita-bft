@@ -23,15 +23,17 @@ use std::str;
 
 const DELETE_FILE_INTERVAL: usize = 3;
 
+#[derive(Debug, Clone, Copy)]
 pub enum LogType {
+    Skip = !0,
     Propose = 1,
     Vote = 2,
     State = 3,
     PrevHash = 4,
     Commits = 5,
     VerifiedPropose = 6,
-    AuthTxs = 7,
     VerifiedBlock = 8,
+    AuthTxs = 9,
 }
 
 impl From<u8> for LogType {
@@ -43,9 +45,9 @@ impl From<u8> for LogType {
             4 => LogType::PrevHash,
             5 => LogType::Commits,
             6 => LogType::VerifiedPropose,
-            7 => LogType::AuthTxs,
             8 => LogType::VerifiedBlock,
-            _ => panic!("Invalid LogType."),
+            9 => LogType::AuthTxs,
+            _ => LogType::Skip,
         }
     }
 }

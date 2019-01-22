@@ -19,7 +19,7 @@ use super::Step;
 use bincode::{serialize, Infinite};
 use crypto::{pubkey_to_address, Sign, Signature};
 use hashable::Hashable;
-use libproto::blockchain::CompactBlock;
+use libproto::blockchain::{Block, CompactBlock};
 use libproto::TryFrom;
 use lru_cache::LruCache;
 use std::collections::HashMap;
@@ -279,6 +279,8 @@ impl Proposal {
             match ret {
                 Ok(Some(p)) => {
                     if let Ok(block) = CompactBlock::try_from(&self.block) {
+                        block.crypt_hash() == p
+                    } else if let Ok(block) = Block::try_from(&self.block) {
                         block.crypt_hash() == p
                     } else {
                         false
