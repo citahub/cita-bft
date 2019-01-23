@@ -1728,26 +1728,23 @@ impl Bft {
 
     fn process_snapshot(&mut self, mut msg: Message) {
         if let Some(req) = msg.take_snapshot_req() {
-            let mut resp = SnapshotResp::new();
-            let mut send = false;
             match req.cmd {
                 Cmd::Snapshot => {
-                    info!("[snapshot] receive cmd: Snapshot");
+                    info!("receive Snapshot::Snapshot: {:?}", req);
+                    snapshot_response(&self.pub_sender, Resp::SnapshotAck, true);
                 }
                 Cmd::Begin => {
-                    info!("[snapshot] receive cmd: Begin");
+                    info!("receive Snapshot::Begin: {:?}", req);
                     self.set_snapshot(true);
                     self.is_cleared = false;
-
-                    resp.set_resp(Resp::BeginAck);
-                    resp.set_flag(true);
-                    send = true;
+                    snapshot_response(&self.pub_sender, Resp::BeginAck, true);
                 }
                 Cmd::Restore => {
-                    info!("[snapshot] receive cmd: Restore");
+                    info!("receive Snapshot::Restore: {:?}", req);
+                    snapshot_response(&self.pub_sender, Resp::RestoreAck, true);
                 }
                 Cmd::Clear => {
-                    info!("[snapshot] receive cmd: Clear");
+                    info!("receive Snapshot::Clear: {:?}", req);
                     let walpath = DataPath::wal_path();
                     let tmp_path = DataPath::root_node_path() + "/wal_tmp";
                     self.wal_log = Wal::create(&*tmp_path).unwrap();
@@ -1757,12 +1754,10 @@ impl Bft {
 
                     self.is_cleared = true;
 
-                    resp.set_resp(Resp::ClearAck);
-                    resp.set_flag(true);
-                    send = true;
+                    snapshot_response(&self.pub_sender, Resp::ClearAck, true);
                 }
                 Cmd::End => {
-                    info!("[snapshot] receive cmd: End");
+                    info!("receive Snapshot::End: {:?}", req);
                     if self.is_cleared {
                         self.consensus_power = false;
                         self.clean_verified_info(0);
@@ -1786,20 +1781,8 @@ impl Bft {
                     self.set_snapshot(false);
                     self.is_cleared = false;
 
-                    resp.set_resp(Resp::EndAck);
-                    resp.set_flag(true);
-                    send = true;
+                    snapshot_response(&self.pub_sender, Resp::EndAck, true);
                 }
-            }
-
-            if send {
-                let msg: Message = resp.into();
-                self.pub_sender
-                    .send((
-                        routing_key!(Consensus >> SnapshotResp).into(),
-                        (&msg).try_into().unwrap(),
-                    ))
-                    .unwrap();
             }
         }
     }
@@ -2062,4 +2045,19 @@ impl Bft {
             }
         }
     }
+}
+
+fn snapshot_response(sender: &Sender<(String, Vec<u8>)>, ack: Resp, flag: bool) {
+    info!("snapshot_response ack: {:?}, flag: {}", ack, flag);
+
+    let mut resp = SnapshotResp::new();
+    resp.set_resp(ack);
+    resp.set_flag(flag);
+    let msg: Message = resp.into();
+    sender
+        .send((
+            routing_key!(Consensus >> SnapshotResp).into(),
+            (&msg).try_into().unwrap(),
+        ))
+        .unwrap();
 }
