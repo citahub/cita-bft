@@ -1622,8 +1622,11 @@ impl Bft {
                         );
                         self.consensus_power = false;
                     }
-                    self.auth_manage
-                        .receive_authorities_list(self.height, authorities, validators);
+                    self.auth_manage.receive_authorities_list(
+                        self.height,
+                        &authorities,
+                        &validators,
+                    );
                     let version = rich_status.get_version();
                     trace!("verison: {}", version);
                     self.version = Some(version);
