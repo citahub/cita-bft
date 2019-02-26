@@ -37,9 +37,9 @@ use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
 use libproto::{TryFrom, TryInto};
 use proof::BftProof;
+use pubsub::channel::{Receiver, Sender};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
-use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use cita_directories::DataPath;
