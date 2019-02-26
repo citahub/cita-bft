@@ -17,8 +17,8 @@
 
 use core::cita_bft::{BftTurn, Step};
 use min_max_heap::MinMaxHeap;
+use pubsub::channel::{Receiver, Sender};
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]

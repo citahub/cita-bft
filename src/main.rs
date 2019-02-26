@@ -72,7 +72,7 @@ extern crate time;
 extern crate util;
 
 use clap::App;
-use std::sync::mpsc::channel;
+use pubsub::channel;
 use std::thread;
 
 mod core;
@@ -149,8 +149,8 @@ fn main() {
         .unwrap();
 
     // timer module
-    let (main2timer, timer4main) = channel();
-    let (sender, receiver) = channel();
+    let (main2timer, timer4main) = channel::unbounded();
+    let (sender, receiver) = channel::unbounded();
     let timethd = {
         let sender = sender.clone();
         thread::spawn(move || {
@@ -160,8 +160,8 @@ fn main() {
     };
 
     // mq pubsub module
-    let (tx_sub, rx_sub) = channel();
-    let (tx_pub, rx_pub) = channel();
+    let (tx_sub, rx_sub) = channel::unbounded();
+    let (tx_pub, rx_pub) = channel::unbounded();
     start_pubsub(
         "consensus",
         routing_key!([
