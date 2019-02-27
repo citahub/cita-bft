@@ -464,6 +464,7 @@ impl Bft {
         let lock_votes = commit.lock_votes;
         let proof = self.generate_proof(height, round, hash, lock_votes)?;
         self.proof = proof.clone();
+
         let mut block_with_proof = BlockWithProof::new();
         block_with_proof.set_blk(block.clone());
         block_with_proof.set_proof(proof.into());
@@ -695,19 +696,13 @@ impl Bft {
         Ok(())
     }
 
-    fn check_lock_votes(&self, proto_proposal: &ProtoProposal, proposal_hash: &H256) -> BftResult<()> {
+    fn check_lock_votes(&mut self, proto_proposal: &ProtoProposal, proposal_hash: &H256) -> BftResult<()> {
         let height = proto_proposal.get_height() as usize;
         if height < self.height - 1 {
             return Err(BftError::ShouldNotHappen);
         }
 
         let round = proto_proposal.get_round() as usize;
-
-        let p = &self.auth_manage;
-        let mut authority_n = p.authority_n;
-        if height == *(&p.authority_h_old) {
-            authority_n = p.authority_n_old;
-        }
 
         let mut map = HashMap::new();
         if proto_proposal.get_islock() {
@@ -718,13 +713,20 @@ impl Bft {
                 }
             }
         }
+
+        let p = &self.auth_manage;
+        let mut authority_n = p.authority_n;
+        if height == *(&p.authority_h_old) {
+            authority_n = p.authority_n_old;
+        }
+
         if map.len() * 3 > authority_n * 2 {
             return Ok(());
         }
         Err(BftError::NotEnoughVotes)
     }
 
-    fn check_proto_vote(&self, height: usize, round: usize, proposal_hash: &H256, vote: &ProtoVote) -> BftResult<Address> {
+    fn check_proto_vote(&mut self, height: usize, round: usize, proposal_hash: &H256, vote: &ProtoVote) -> BftResult<Address> {
         if height < self.height - 1 {
             return Err(BftError::ShouldNotHappen);
         }
@@ -751,16 +753,19 @@ impl Bft {
         let hash = message.crypt_hash();
         let signature = Signature::from(signature);
         let address = check_signature(&signature, &hash)?;
-        // TODO: store lock_votes into self.votes
-
         if address != sender {
             return Err(BftError::MismatchingVoter);
         }
+
+        let msg = serialize(&(message, signature), Infinite).unwrap();
+        let raw_bytes: RawBytes = msg.try_into().unwrap();
+        let bft_vote = extract_bft_vote(&raw_bytes);
+        let signed_vote = extract_signed_vote(&raw_bytes);
+        self.votes.add(height, round, Step::Prevote, &bft_vote, &signed_vote);
+
         Ok(sender)
     }
 }
-
-
 
 fn gen_reqid_from_idx(h: u64, r: u64) -> u64 {
     ((h & 0xffff_ffff_ffff) << 16) | r
