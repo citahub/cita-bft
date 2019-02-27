@@ -1824,11 +1824,11 @@ impl Bft {
             return;
         }
         let new_round = if status_height == height {
-            self.pre_hash = Some(pre_hash);
             self.round
         } else {
             INIT_ROUND
         };
+        self.pre_hash = Some(pre_hash);
         // try my effor to save proof,when I skipping commit_blcok by the chain sending new status.
         if self.proof.height != height {
             if let Some(hash) = self.proposal {
