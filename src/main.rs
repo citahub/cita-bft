@@ -24,35 +24,34 @@
 //!
 //! 1. Subscribe channel
 //!
-//!     | Queue     | PubModule | Message Type    |
-//!     | --------- | --------- | --------------- |
-//!     | consensus | Net       | SignedProposal  |
-//!     | consensus | Net       | RawBytes        |
-//!     | consensus | Chain     | RichStatus      |
-//!     | consensus | Auth      | BlockTxs        |
-//!     | consensus | Auth      | VerifyBlockResp |
-//!     | consensus | Snapshot  | SnapshotReq     |
+//!     | Queue     | PubModule | Message Type          |
+//!     | --------- | --------- | --------------------- |
+//!     | consensus | Net       | CompactSignedProposal |
+//!     | consensus | Net       | RawBytes              |
+//!     | consensus | Chain     | RichStatus            |
+//!     | consensus | Auth      | BlockTxs              |
+//!     | consensus | Auth      | VerifyBlockResp       |
+//!     | consensus | Snapshot  | SnapshotReq           |
 //!
 //! 2. Publish channel
 //!
-//!     | Queue     | PubModule | SubModule       | Message Type    |
-//!     | --------- | --------- | --------------- | --------------- |
-//!     | consensus | Consensus | Auth            | VerifyBlockReq  |
-//!     | consensus | Consensus | Net             | RawBytes        |
-//!     | consensus | Consensus | Chain, Executor | BlockWithProof  |
-//!     | consensus | Consensus | Net, Executor   | SignedProposal  |
-//!     | consensus | Consensus | Snapshot        | SnapshotResp    |
+//!     | Queue     | PubModule | SubModule       | Message Type          |
+//!     | --------- | --------- | --------------- | --------------------- |
+//!     | consensus | Consensus | Auth            | VerifyBlockReq        |
+//!     | consensus | Consensus | Net             | RawBytes              |
+//!     | consensus | Consensus | Chain, Executor | BlockWithProof        |
+//!     | consensus | Consensus | Net             | CompactSignedProposal |
+//!     | consensus | Consensus | Executor        | SignedProposal        |
+//!     | consensus | Consensus | Snapshot        | SnapshotResp          |
 //!
-
-#![feature(mpsc_select)]
 #![feature(try_from)]
-
 extern crate authority_manage;
+extern crate bft_rs;
 extern crate bincode;
 extern crate cita_crypto as crypto;
 extern crate cita_types as types;
 extern crate clap;
-extern crate cpuprofiler;
+extern crate crossbeam;
 extern crate dotenv;
 extern crate engine;
 #[macro_use]
@@ -60,51 +59,28 @@ extern crate libproto;
 #[macro_use]
 extern crate logger;
 extern crate lru_cache;
-extern crate ntp;
 extern crate proof;
 extern crate pubsub;
 extern crate rustc_hex;
-#[macro_use]
-extern crate serde_derive;
-extern crate threadpool;
 extern crate time;
 #[macro_use]
 extern crate util;
 
+use bft_rs::algorithm::Bft as AlgoBft;
 use clap::App;
-use std::sync::mpsc::channel;
-use std::thread;
-
 mod core;
-use core::cita_bft::Bft;
-use core::params::{BftParams, Config, PrivateKey};
-use core::votetime::WaitTimer;
-use cpuprofiler::PROFILER;
+use core::cita_bft::{Bft, MixMsg};
+use crossbeam::crossbeam_channel::unbounded;
+use crypto::{PrivKey, Signer};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
-use std::thread::sleep;
-use std::time::Duration;
+use std::fs::File;
+use std::io::Read;
+use std::str::FromStr;
+use std::sync::mpsc::channel;
+use std::thread;
+use types::clean_0x;
 use util::set_panic_handler;
-
-const THREAD_POOL_NUM: usize = 10;
-
-fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
-    //start profiling
-    if flag_prof_duration != 0 {
-        let start = flag_prof_start;
-        let duration = flag_prof_duration;
-        thread::spawn(move || {
-            thread::sleep(std::time::Duration::new(start, 0));
-            PROFILER
-                .lock()
-                .unwrap()
-                .start("./tdmint.profiler")
-                .expect("Couldn't start");
-            thread::sleep(std::time::Duration::new(duration, 0));
-            PROFILER.lock().unwrap().stop().unwrap();
-        });
-    }
-}
 
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
@@ -127,42 +103,34 @@ fn main() {
         )
         .get_matches();
 
-    let mut config_path = "consensus.toml";
-    if let Some(c) = matches.value_of("config") {
-        trace!("Value for config: {}", c);
-        config_path = c;
-    }
-
     let mut pk_path = "privkey";
     if let Some(p) = matches.value_of("private") {
         trace!("Value for config: {}", p);
         pk_path = p;
     }
 
-    let flag_prof_start = matches
-        .value_of("prof-start")
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap();
-    let flag_prof_duration = matches
-        .value_of("prof-duration")
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap();
+    let mut buffer = String::new();
+    File::open(pk_path)
+        .and_then(|mut f| f.read_to_string(&mut buffer))
+        .unwrap_or_else(|err| panic!("Error while loading PrivateKey: [{}]", err));
 
-    // timer module
-    let (main2timer, timer4main) = channel();
-    let (timer2main, main4timer) = channel();
-    let timethd = thread::spawn(move || {
-        let wt = WaitTimer::new(timer2main, timer4main);
-        wt.start();
-    });
+    let signer = PrivKey::from_str(clean_0x(&buffer)).unwrap();
+    let bft_signer = signer.clone();
 
-    // mq pubsub module
-    let threadpool = threadpool::ThreadPool::new(THREAD_POOL_NUM);
-    let (mq2main, main4mq) = channel();
-    let (tx_sub, rx_sub) = channel();
-    let (tx_pub, rx_pub) = channel();
+    let signer = Signer::from(signer);
+    let bft_signer = Signer::from(bft_signer);
+
+    let address: &[u8] = bft_signer.address.as_ref();
+    let address = Vec::from(address);
+
+    let (rab2cita, cita4rab) = channel();
+    let (cita2rab, rab4cita) = channel();
+
+    let (bft2cita, cita4bft) = unbounded();
+    let (cita2bft, bft4cita) = unbounded();
+
+    let (sender, receiver) = unbounded();
+
     start_pubsub(
         "consensus",
         routing_key!([
@@ -171,60 +139,36 @@ fn main() {
             Chain >> RichStatus,
             Auth >> BlockTxs,
             Auth >> VerifyBlockResp,
-            Snapshot >> SnapshotReq,
         ]),
-        tx_sub,
-        rx_pub,
+        rab2cita,
+        rab4cita,
     );
-    thread::spawn(move || loop {
-        let (key, body) = rx_sub.recv().unwrap();
-        let tx = mq2main.clone();
-        let pool = threadpool.clone();
-        pool.execute(move || {
-            tx.send((key, body)).unwrap();
-        });
+
+    let rab_sender = sender.clone();
+
+    thread::spawn(move || {
+        let (key, body) = cita4rab.recv().unwrap();
+        rab_sender.send(MixMsg::RabMsg((key, body))).unwrap();
     });
 
-    let config = Config::new(config_path);
 
-    let pk = PrivateKey::new(pk_path);
+    let bft_thread = {
+        thread::spawn(move || {
+            AlgoBft::start(bft2cita, bft4cita, address);
+        })
+    };
 
-    // main cita-bft loop module
-    let params = BftParams::new(&pk);
-    let mainthd = thread::spawn(move || {
-        let mut engine = Bft::new(tx_pub, main4mq, main2timer, main4timer, params);
+    thread::spawn(move || {
+        let msg = cita4bft.recv().unwrap();
+        let sender = sender.clone();
+        sender.send(MixMsg::BftMsg(msg)).unwrap();
+    });
+
+    let main_thread = thread::spawn(move || {
+        let mut engine = Bft::new(cita2rab, cita2bft, receiver, signer);
         engine.start();
     });
 
-    // NTP service
-    let ntp_config = config.ntp_config.clone();
-    // Default
-    // let ntp_config = Ntp {
-    //     enabled: true,
-    //     threshold: 3000,
-    //     address: String::from("0.pool.ntp.org:123"),
-    // };
-    let mut log_tag: u8 = 0;
-
-    if ntp_config.enabled {
-        thread::spawn(move || loop {
-            if ntp_config.is_clock_offset_overflow() {
-                warn!("System clock seems off!!!");
-                log_tag += 1;
-                if log_tag == 10 {
-                    log_tag = 0;
-                    sleep(Duration::new(1000, 0));
-                }
-            } else {
-                log_tag = 0;
-            }
-
-            sleep(Duration::new(10, 0));
-        });
-    }
-
-    profiler(flag_prof_start, flag_prof_duration);
-
-    mainthd.join().unwrap();
-    timethd.join().unwrap();
+    bft_thread.join().unwrap();
+    main_thread.join().unwrap();
 }

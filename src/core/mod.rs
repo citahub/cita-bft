@@ -16,14 +16,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 pub mod cita_bft;
-pub mod ntp;
-pub mod params;
-pub mod voteset;
-pub mod votetime;
+pub mod collector;
+pub mod error;
+pub mod transform;
 pub mod wal;
 
 pub use self::cita_bft::*;
-pub use self::params::*;
-pub use self::voteset::*;
+pub use self::collector::*;
+pub use self::error::*;
+pub use self::transform::*;
 
 pub use libproto::blockchain::{Block, BlockBody, BlockHeader, Proof, Status, Transaction};
