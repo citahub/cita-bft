@@ -44,10 +44,11 @@ pub enum BftError {
     AuthVerifyFailed,
     ObsoleteVerifyBlockResp,
     ObsoleteRichStatus,
-//    GenerateProofFailed,
+    GenerateProofFailed,
     ObsoleteBftProposal,
     ObsoleteBftVote,
     ObsoleteCommit,
+    ShouldNotHappen,
 }
 
 

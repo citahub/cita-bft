@@ -175,7 +175,7 @@ impl Bft {
                                     for (_, vote_set) in step_votes.step_votes.iter() {
                                         for (bft_vote, _) in vote_set.vote_pair.iter() {
                                             let sender = Address::from_slice(&bft_vote.voter);
-                                            self.check_raw_bytes_sender(&sender)?;
+                                            self.check_raw_bytes_sender(height, &sender)?;
                                             let bft_vote: BftVote = bft_vote.clone();
                                             self.cita2bft.send(BftMsg::Vote(bft_vote)).unwrap();
                                         }
@@ -262,26 +262,26 @@ impl Bft {
             }
         }
         let bft_proposal = extract_bft_proposal(&signed_proposal);
-        if height < self.height {
-            // TODO: check_old_proposal , or combine with check_proposer
-            return Ok(bft_proposal);
-        }
 
         self.check_proposer(height, round, &address)?;
         self.check_lock_votes(&proto_proposal, &hash)?;
+
+        if height < self.height {
+            return Ok(bft_proposal);
+        }
 
         let block_hash = block.crypt_hash();
         if self.verified_proposals.contains(&block_hash) {
             return Ok(bft_proposal);
         }
 
-        self.check_pre_hash(block)?;
+        self.check_pre_hash(height, block)?;
         self.check_proof(height, block)?;
         let transactions = block.get_body().get_transactions();
         if transactions.len() == 0 {
             return Ok(bft_proposal);
         }
-        self.send_auth_for_validation(block, height, round);
+        self.send_auth_for_validation(block, height, round)?;
         Err(BftError::WaitForAuthValidation)
     }
 
@@ -306,13 +306,13 @@ impl Bft {
             return Ok(bft_proposal);
         }
 
-        self.check_pre_hash(block)?;
+        self.check_pre_hash(height, block)?;
         self.check_proof(height, block)?;
         let transactions = block.get_body().get_transactions();
         if transactions.len() == 0 {
             return Ok(bft_proposal);
         }
-        self.send_auth_for_validation(block, height, round);
+        self.send_auth_for_validation(block, height, round)?;
         Err(BftError::WaitForAuthValidation)
     }
 
@@ -368,13 +368,12 @@ impl Bft {
                 return Err(BftError::HigherRawBytes);
             }
         }
+
+        self.check_raw_bytes_sender(height, &sender)?;
         if height < self.height {
-            // TODO: check_old_proposal , or combine with check_proposer
             return Ok(bft_vote);
         }
 //        self.check_filter(sender, round, step)?;
-        self.check_raw_bytes_sender(&sender)?;
-
         Ok(bft_vote)
     }
 
@@ -477,10 +476,15 @@ impl Bft {
             let vote_set = self.votes.get_vote_set(height, round, Step::Precommit);
             if let Some(vote_set) = vote_set {
                 for vote in lock_votes {
-                    let signed_vote = vote_set.vote_pair.get(&vote).unwrap();
-                    let sender = Address::from_slice(&vote.voter);
-                    commits.insert(sender, signed_vote.signature.clone());
+                    if let Some(signed_vote) = vote_set.vote_pair.get(&vote) {
+                        let sender = Address::from_slice(&vote.voter);
+                        commits.insert(sender, signed_vote.signature.clone());
+                    } else {
+                        return Err(BftError::GenerateProofFailed);
+                    }
                 }
+            } else {
+                return Err(BftError::GenerateProofFailed);
             }
         }
         let mut proof = BftProof::default();
@@ -587,7 +591,10 @@ impl Bft {
 //        Err(BftError::RawBytesReceivedFrequently)
 //    }
 
-    fn send_auth_for_validation(&mut self, block: &Block, height: usize, round: usize) {
+    fn send_auth_for_validation(&mut self, block: &Block, height: usize, round: usize) -> BftResult<()>  {
+        if height != self.height {
+            return Err(BftError::ShouldNotHappen);
+        }
         let reqid = gen_reqid_from_idx(height as u64, round as u64);
         let verify_req = block.block_verify_req(reqid);
         let msg: Message = verify_req.into();
@@ -597,6 +604,7 @@ impl Bft {
                 (&msg).try_into().unwrap(),
             ))
             .unwrap();
+        Ok(())
     }
 
 
@@ -612,16 +620,22 @@ impl Bft {
 
 
     fn check_proposer(&self, height: usize, round: usize, address: &Address) -> BftResult<()> {
+        if height < self.height - 1 {
+            return Err(BftError::ShouldNotHappen);
+        }
         let p = &self.auth_manage;
-        let authority_n = p.authority_n;
-        let authorities = &p.authorities;
-        if authority_n == 0 {
+        let mut authority_n = &p.authority_n;
+        let mut authorities = &p.authorities;
+        if height == *(&p.authority_h_old) {
+            authority_n = &p.authority_n_old;
+            authorities = &p.authorities_old;
+        }
+        if *authority_n == 0 {
             return Err(BftError::EmptyAuthManage);
         }
         let proposer_nonce = height + round;
         let proposer: &Address = authorities.get(proposer_nonce % authority_n).expect(
-            "There are authority_n authorities; \
-             taking number modulo authority_n gives number in authority_n range; qed",
+            "Counting proposer failed!",
         );
         if proposer == address {
             Ok(())
@@ -630,14 +644,25 @@ impl Bft {
         }
     }
 
-    fn check_raw_bytes_sender(&self, sender: &Address) -> BftResult<()> {
-        if !self.auth_manage.authorities.contains(sender) {
+    fn check_raw_bytes_sender(&self, height: usize, sender: &Address) -> BftResult<()> {
+        if height < self.height - 1 {
+            return Err(BftError::ShouldNotHappen);
+        }
+        let p = &self.auth_manage;
+        let mut authorities = &p.authorities;
+        if height == *(&p.authority_h_old) {
+            authorities = &p.authorities_old;
+        }
+        if !authorities.contains(sender) {
             return Err(BftError::InvalidVoter);
         }
         Ok(())
     }
 
-    fn check_pre_hash(&self, block: &Block) -> BftResult<()> {
+    fn check_pre_hash(&self, height: usize, block: &Block) -> BftResult<()> {
+        if height != self.height {
+            return Err(BftError::ShouldNotHappen);
+        }
         if let Some(hash) = self.pre_hash {
             let mut block_prehash = Vec::new();
             block_prehash.extend_from_slice(block.get_header().get_prevhash());
@@ -650,6 +675,9 @@ impl Bft {
     }
 
     fn check_proof(&mut self, height: usize, block: &Block) -> BftResult<()> {
+        if height != self.height {
+            return Err(BftError::ShouldNotHappen);
+        }
         let block_proof = block.get_header().get_proof();
         let proof = BftProof::from(block_proof.clone());
 
@@ -668,11 +696,18 @@ impl Bft {
     }
 
     fn check_lock_votes(&self, proto_proposal: &ProtoProposal, proposal_hash: &H256) -> BftResult<()> {
-        let height = proto_proposal.get_height();
-        let round = proto_proposal.get_round();
+        let height = proto_proposal.get_height() as usize;
+        if height < self.height - 1 {
+            return Err(BftError::ShouldNotHappen);
+        }
+
+        let round = proto_proposal.get_round() as usize;
 
         let p = &self.auth_manage;
-        let authority_n = p.authority_n;
+        let mut authority_n = p.authority_n;
+        if height == *(&p.authority_h_old) {
+            authority_n = p.authority_n_old;
+        }
 
         let mut map = HashMap::new();
         if proto_proposal.get_islock() {
@@ -689,8 +724,16 @@ impl Bft {
         Err(BftError::NotEnoughVotes)
     }
 
-    fn check_proto_vote(&self, height: u64, round: u64, proposal_hash: &H256, vote: &ProtoVote) -> BftResult<Address> {
-        let authorities = &self.auth_manage.authorities;
+    fn check_proto_vote(&self, height: usize, round: usize, proposal_hash: &H256, vote: &ProtoVote) -> BftResult<Address> {
+        if height < self.height - 1 {
+            return Err(BftError::ShouldNotHappen);
+        }
+
+        let p = &self.auth_manage;
+        let mut authorities = &p.authorities;
+        if height == *(&p.authority_h_old) {
+            authorities = &p.authorities_old;
+        }
 
         let hash = H256::from_slice(vote.get_proposal());
         if hash != *proposal_hash {
@@ -704,7 +747,7 @@ impl Bft {
 
         let signature = vote.get_signature();
         check_signature_len(signature)?;
-        let message = serialize(&(height, round, Step::Prevote, sender, proposal_hash), Infinite).unwrap();
+        let message = serialize(&(height as u64, round as u64, Step::Prevote, sender, proposal_hash), Infinite).unwrap();
         let hash = message.crypt_hash();
         let signature = Signature::from(signature);
         let address = check_signature(&signature, &hash)?;
