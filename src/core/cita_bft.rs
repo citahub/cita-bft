@@ -42,6 +42,14 @@ use util::{BLOCKLIMIT, Hashable};
 
 const INIT_HEIGHT: usize = 1;
 //const TIMEOUT_OF_LOW_ROUND_VOTE: u64 = 1000;
+const LOG_TYPE_SIGNED_PROPOSAL: u8 = 1;
+const LOG_TYPE_RAW_BYTES: u8 = 2;
+const LOG_TYPE_RICH_STATUS: u8 = 3;
+const LOG_TYPE_BLOCK_TXS: u8 = 4;
+const LOG_TYPE_VERIFY_BLOCK_PESP: u8 = 5;
+const LOG_TYPE_PROPOSAL: u8 = 6;
+const LOG_TYPE_VOTE: u8 = 7;
+const LOG_TYPE_COMMIT: u8 = 8;
 
 pub type BftResult<T> = Result<T, BftError>;
 pub type RabMsg = (String, Vec<u8>);
@@ -120,12 +128,12 @@ impl Bft {
         }
     }
 
-    pub fn start(&mut self) {
-        self.load_wal_log();
+    pub fn start(&mut self) -> BftResult<()>{
+        self.load_wal_log()?;
         loop {
             match self.receiver.recv() {
                 Ok(msg) => {
-                    let _ = self.process(msg);
+                    let _ = self.process(msg)?;
                 }
                 _ => {}
             }
@@ -142,12 +150,12 @@ impl Bft {
                 if from_broadcast && self.consensus_power {
                     match msg_type {
                         routing_key!(Net >> SignedProposal) => {
-                            let proposal = self.handle_signed_proposal(msg)?;
+                            let proposal = self.handle_signed_proposal(msg, true)?;
                             self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                         }
 
                         routing_key!(Net >> RawBytes) => {
-                            let vote = self.handle_raw_bytes(msg)?;
+                            let vote = self.handle_raw_bytes(msg, true)?;
                             self.cita2bft.send(BftMsg::Vote(vote)).unwrap();
                         }
 
@@ -156,7 +164,7 @@ impl Bft {
                 } else {
                     match msg_type {
                         routing_key!(Chain >> RichStatus) => {
-                            let status = self.handle_rich_status(msg)?;
+                            let status = self.handle_rich_status(msg, true)?;
                             self.cita2bft.send(BftMsg::Status(status)).unwrap();
                             let height = self.height;//ProposalRoundCollector
                             let mut proposals = self.proposals.proposals.clone();
@@ -186,12 +194,12 @@ impl Bft {
                         }
 
                         routing_key!(Auth >> BlockTxs) => {
-                            let feed = self.handle_block_txs(msg)?;
+                            let feed = self.handle_block_txs(msg, true)?;
                             self.cita2bft.send(BftMsg::Feed(feed)).unwrap();
                         }
 
                         routing_key!(Auth >> VerifyBlockResp) => {
-                            let proposal = self.handle_verify_block_resp(msg)?;
+                            let proposal = self.handle_verify_block_resp(msg, true)?;
                             self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                         }
 
@@ -202,7 +210,7 @@ impl Bft {
             MixMsg::BftMsg(msg) => {
                 match msg {
                     BftMsg::Proposal(proposal) => {
-                        let signed_proposal = self.handle_proposal(proposal)?;
+                        let signed_proposal = self.handle_proposal(proposal, true)?;
                         self.cita2rab.send((
                             routing_key!(Consensus >> SignedProposal).into(),
                             signed_proposal.try_into().unwrap(),
@@ -211,7 +219,7 @@ impl Bft {
                     }
 
                     BftMsg::Vote(vote) => {
-                        let signed_vote = self.handle_vote(vote)?;
+                        let signed_vote = self.handle_vote(vote, true)?;
                         self.cita2rab.send((
                             routing_key!(Consensus >> RawBytes).into(),
                             signed_vote.try_into().unwrap(),
@@ -219,7 +227,7 @@ impl Bft {
                     }
 
                     BftMsg::Commit(commit) => {
-                        let block_with_proof = self.handle_commit(commit)?;
+                        let block_with_proof = self.handle_commit(commit, true)?;
                         self.cita2rab.send((
                             routing_key!(Consensus >> BlockWithProof).into(),
                             block_with_proof.try_into().unwrap(),
@@ -233,7 +241,7 @@ impl Bft {
         Ok(())
     }
 
-    fn handle_signed_proposal(&mut self, mut msg: Message) -> BftResult<BftProposal> {
+    fn handle_signed_proposal(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftProposal> {
         let signed_proposal = msg.take_signed_proposal().unwrap();
         let signature = signed_proposal.get_signature();
         check_signature_len(signature)?;
@@ -255,6 +263,10 @@ impl Bft {
 
         if height >= self.height {
             if height - self.height < CACHE_NUMBER {
+                if need_wal {
+                    let msg: Vec<u8> = msg.try_into().unwrap();
+                    self.wal_log.save(height, LOG_TYPE_SIGNED_PROPOSAL, &msg).unwrap();
+                }
                 self.proposals.add(height, round, &signed_proposal);
             }
             if height > self.height {
@@ -316,7 +328,7 @@ impl Bft {
         Err(BftError::WaitForAuthValidation)
     }
 
-    fn handle_verify_block_resp(&mut self, mut msg: Message) -> BftResult<BftProposal> {
+    fn handle_verify_block_resp(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftProposal> {
         let resp = msg.take_verify_block_resp().unwrap();
         if resp.get_ret() != auth::Ret::OK {
             return Err(BftError::AuthVerifyFailed);
@@ -328,6 +340,10 @@ impl Bft {
         if height < self.height {
             return Err(BftError::ObsoleteVerifyBlockResp);
         }
+        if need_wal {
+            let msg: Vec<u8> = msg.try_into().unwrap();
+            self.wal_log.save(height, LOG_TYPE_VERIFY_BLOCK_PESP, &msg).unwrap();
+        }
         let signed_proposal = self.proposals.get_proposal(height, round).unwrap();
         let bft_proposal = extract_bft_proposal(&signed_proposal);
         let hash = H256::from_slice(&(bft_proposal.content));
@@ -335,7 +351,7 @@ impl Bft {
         Ok(bft_proposal)
     }
 
-    fn handle_raw_bytes(&mut self, mut msg: Message) -> BftResult<BftVote> {
+    fn handle_raw_bytes(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftVote> {
         let raw_bytes = msg.take_raw_bytes().unwrap();
         let decoded = deserialize(&raw_bytes).unwrap();
         let (message, signature): (Vec<u8>, &[u8]) = decoded;
@@ -362,6 +378,10 @@ impl Bft {
 
         if height >= self.height {
             if height - self.height < CACHE_NUMBER {
+                if need_wal {
+                    let msg: Vec<u8> = msg.try_into().unwrap();
+                    self.wal_log.save(height, LOG_TYPE_RAW_BYTES, &msg).unwrap();
+                }
                 self.votes.add(height, round, step, &bft_vote, &signed_vote);
             }
             if height > self.height {
@@ -377,11 +397,15 @@ impl Bft {
         Ok(bft_vote)
     }
 
-    fn handle_block_txs(&mut self, mut msg: Message) -> BftResult<Feed> {
+    fn handle_block_txs(&mut self, mut msg: Message, need_wal: bool) -> BftResult<Feed> {
         let block_txs = msg.take_block_txs().unwrap();
         let height = block_txs.get_height() as usize;
         if height < self.height - 1 {
             return Err(BftError::ObsoleteBlockTxs);
+        }
+        if need_wal {
+            let msg: Vec<u8> = msg.try_into().unwrap();
+            self.wal_log.save(height, LOG_TYPE_BLOCK_TXS, &msg).unwrap();
         }
         let block = self.build_feed_block(block_txs)?;
         self.feed_block.push_back((height, block.clone()));
@@ -389,11 +413,15 @@ impl Bft {
         Ok(feed)
     }
 
-    fn handle_rich_status(&mut self, mut msg: Message) -> BftResult<BftStatus> {
+    fn handle_rich_status(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftStatus> {
         let rich_status = msg.take_rich_status().unwrap();
         let height = rich_status.height as usize;
         if height < self.height {
             return Err(BftError::ObsoleteRichStatus);
+        }
+        if need_wal {
+            let msg: Vec<u8> = msg.try_into().unwrap();
+            self.wal_log.save(height, LOG_TYPE_RICH_STATUS, &msg).unwrap();
         }
         let pre_hash = H256::from_slice(&rich_status.hash);
         self.pre_hash = Some(pre_hash);
@@ -414,21 +442,29 @@ impl Bft {
         Ok(bft_status)
     }
 
-    fn handle_proposal(&mut self, proposal: BftProposal) -> BftResult<SignedProposal> {
+    fn handle_proposal(&mut self, proposal: BftProposal, need_wal: bool) -> BftResult<SignedProposal> {
         let height = proposal.height;
         let round = proposal.round;
         if height < self.height {
             return Err(BftError::ObsoleteBftProposal);
+        }
+        if need_wal {
+            let msg: Vec<u8> = serialize(&(proposal), Infinite).unwrap();
+            self.wal_log.save(height, LOG_TYPE_PROPOSAL, &msg).unwrap();
         }
         let signed_proposal = self.build_signed_proposal(proposal)?;
         self.proposals.add(height, round, &signed_proposal);
         Ok(signed_proposal)
     }
 
-    fn handle_vote(&mut self, vote: BftVote) -> BftResult<RawBytes> {
+    fn handle_vote(&mut self, vote: BftVote, need_wal: bool) -> BftResult<RawBytes> {
         let height = vote.height;
         if height < self.height {
             return Err(BftError::ObsoleteBftVote);
+        }
+        if need_wal {
+            let msg: Vec<u8> = serialize(&(vote), Infinite).unwrap();
+            self.wal_log.save(height, LOG_TYPE_VOTE, &msg).unwrap();
         }
         let raw_bytes = self.build_raw_bytes(vote.clone())?;
         let signed_vote = extract_signed_vote(&raw_bytes);
@@ -436,10 +472,14 @@ impl Bft {
         Ok(raw_bytes)
     }
 
-    fn handle_commit(&mut self, commit: Commit) -> BftResult<BlockWithProof>{
+    fn handle_commit(&mut self, commit: Commit, need_wal: bool) -> BftResult<BlockWithProof>{
         let height = commit.height;
         if height < self.height {
             return Err(BftError::ObsoleteCommit);
+        }
+        if need_wal {
+            let msg: Vec<u8> = serialize(&(commit), Infinite).unwrap();
+            self.wal_log.save(height, LOG_TYPE_COMMIT, &msg).unwrap();
         }
         let block_with_proof = self.build_block_with_proof(commit)?;
         Ok(block_with_proof)
@@ -609,14 +649,47 @@ impl Bft {
     }
 
 
-    fn load_wal_log(&mut self) {
-//        let items = self.wal_log.load();
-//        for (key, body) in items {
-//            let log_type: LogType = key.into();
-//            match log_type {
-//                _ => {}
-//            }
-//        }
+    fn load_wal_log(&mut self) -> BftResult<()>{
+        let vec_buf = self.wal_log.load();
+        for (msg_type, msg) in vec_buf {
+            match msg_type {
+                LOG_TYPE_SIGNED_PROPOSAL => {
+                    let msg = Message::try_from(msg).unwrap();
+                    self.handle_signed_proposal(msg, false)?;
+                }
+                LOG_TYPE_RAW_BYTES => {
+                    let msg = Message::try_from(msg).unwrap();
+                    self.handle_raw_bytes(msg, false)?;
+                }
+                LOG_TYPE_RICH_STATUS => {
+                    let msg = Message::try_from(msg).unwrap();
+                    self.handle_rich_status(msg, false)?;
+                }
+                LOG_TYPE_BLOCK_TXS => {
+                    let msg = Message::try_from(msg).unwrap();
+                    self.handle_block_txs(msg, false)?;
+                }
+                LOG_TYPE_VERIFY_BLOCK_PESP => {
+                    let msg = Message::try_from(msg).unwrap();
+                    self.handle_verify_block_resp(msg, false)?;
+                }
+                LOG_TYPE_PROPOSAL => {
+                    let proposal = deserialize(&msg[..]).unwrap();
+                    self.handle_proposal(proposal, false)?;
+                }
+                LOG_TYPE_VOTE => {
+                    let vote = deserialize(&msg[..]).unwrap();
+                    self.handle_vote(vote, false)?;
+                }
+                LOG_TYPE_COMMIT => {
+                    let commit = deserialize(&msg[..]).unwrap();
+                    self.handle_commit(commit, false)?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 
 

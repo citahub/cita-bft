@@ -166,7 +166,7 @@ fn main() {
 
     let main_thread = thread::spawn(move || {
         let mut engine = Bft::new(cita2rab, cita2bft, receiver, signer);
-        engine.start();
+        let _ = engine.start();
     });
 
     bft_thread.join().unwrap();

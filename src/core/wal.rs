@@ -27,7 +27,7 @@ pub struct Wal {
     height_fs: BTreeMap<usize, File>,
     dir: String,
     current_height: usize,
-    ifile: File,
+    ifile: File,    // store off-line height
 }
 
 impl Wal {
@@ -116,7 +116,7 @@ impl Wal {
 
     pub fn save(&mut self, height: usize, mtype: u8, msg: &[u8]) -> io::Result<usize> {
         if !self.height_fs.contains_key(&height) {
-            // 2 more higher then current height, not process it
+            // 2 more higher than current height, do not process it
             if height > self.current_height + 1 {
                 return Ok(0);
             } else if height == self.current_height + 1 {
@@ -144,7 +144,7 @@ impl Wal {
             hlen = fs.write(msg)?;
             fs.flush()?;
         } else {
-            warn!("cita-bft wal save error height {} ", height);
+            warn!("cita-bft wal save error in height {} ", height);
         }
         Ok(hlen)
     }
