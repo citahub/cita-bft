@@ -393,7 +393,7 @@ impl Bft {
         if height < self.height {
             return Ok(bft_vote);
         }
-//        self.check_filter(sender, round, step)?;
+    //        self.check_filter(sender, round, step)?;
         Ok(bft_vote)
     }
 
@@ -584,6 +584,7 @@ impl Bft {
         self.feed_block = self.feed_block.iter().filter(|&&(hi, _)| hi >= height)
             .cloned().collect();
         self.height = height + 1;
+        self.wal_log.set_height(self.height);
     }
 
     fn build_feed_block(&self, block_txs: BlockTxs) -> BftResult<Block>{
