@@ -49,6 +49,7 @@ pub enum BftError {
     ObsoleteBftVote,
     ObsoleteCommit,
     ShouldNotHappen,
+    SetWalHeightFailed,
 }
 
 

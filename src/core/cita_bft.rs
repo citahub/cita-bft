@@ -437,7 +437,7 @@ impl Bft {
             self.consensus_power = false;
         }
 
-        self.set_new_height(height);
+        self.set_new_height(height)?;
         let bft_status = extract_bft_status(&rich_status);
         Ok(bft_status)
     }
@@ -578,13 +578,16 @@ impl Bft {
         Ok(signed_proposal)
     }
 
-    fn set_new_height(&mut self, height: usize) {
+    fn set_new_height(&mut self, height: usize) -> BftResult<()>{
         self.verified_proposals.clear();
 //        self.vote_recv_filter.clear();
         self.feed_block = self.feed_block.iter().filter(|&&(hi, _)| hi >= height)
             .cloned().collect();
         self.height = height + 1;
-        self.wal_log.set_height(self.height);
+        if let Err(_) = self.wal_log.set_height(self.height){
+            return Err(BftError::SetWalHeightFailed);
+        };
+        Ok(())
     }
 
     fn build_feed_block(&self, block_txs: BlockTxs) -> BftResult<Block>{
