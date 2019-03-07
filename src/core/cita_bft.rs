@@ -896,3 +896,18 @@ fn check_tx(tx: &Transaction, height: u64) -> BftResult<()> {
     Ok(())
 }
 
+#[inline]
+fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T> {
+    if let Ok(value) = result {
+        return Ok(value);
+    }
+    Err(err)
+}
+
+#[inline]
+fn safe_unwrap_option<T>(option: Option<T>, err: BftError) -> BftResult<T> {
+    if let Some(value) = option {
+        return Ok(value);
+    }
+    Err(err)
+}
