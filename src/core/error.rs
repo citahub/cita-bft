@@ -39,7 +39,7 @@ pub enum BftError {
     HigherRawBytes,
     HigherProposal,
 //    RawBytesReceivedFrequently,
-    ObsoleteBlockTxs,
+    MismatchingBlockTxs,
     SelfPreHashNotReady,
     SelfProofNotReady,
     AuthVerifyFailed,

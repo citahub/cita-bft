@@ -31,7 +31,7 @@ use libproto::{auth, Message, RawBytes};
 use libproto::consensus::{Proposal as ProtoProposal, SignedProposal, Vote as ProtoVote};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use proof::BftProof;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::convert::{Into, TryFrom, TryInto};
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
@@ -40,7 +40,7 @@ use types::{Address, clean_0x, H256};
 use util::datapath::DataPath;
 use util::{BLOCKLIMIT, Hashable};
 
-const INIT_HEIGHT: usize = 1;
+const INIT_HEIGHT: usize = 0;
 //const TIMEOUT_OF_LOW_ROUND_VOTE: u64 = 1000;
 const LOG_TYPE_SIGNED_PROPOSAL: u8 = 1;
 const LOG_TYPE_RAW_BYTES: u8 = 2;
@@ -73,7 +73,7 @@ pub struct Bft {
     wal_log: Wal,
     auth_manage: AuthorityManage,
     consensus_power: bool,
-    feed_block: VecDeque<(usize, Block)>,
+    feed_block: Option<Block>,
 //    vote_recv_filter: HashMap<Address, (usize, Step, Instant)>,
 }
 
@@ -123,7 +123,7 @@ impl Bft {
             wal_log: Wal::new(&*wal_path).unwrap(),
             auth_manage: AuthorityManage::new(),
             consensus_power: false,
-            feed_block: VecDeque::new(),
+            feed_block: None,
 //            vote_recv_filter: HashMap::new(),
         }
     }
@@ -417,15 +417,16 @@ impl Bft {
     fn handle_block_txs(&mut self, mut msg: Message, need_wal: bool) -> BftResult<Feed> {
         let block_txs = msg.take_block_txs().unwrap();
         let height = block_txs.get_height() as usize;
-        if height < self.height - 1 {
-            return Err(BftError::ObsoleteBlockTxs);
+        if height != self.height - 1 {
+            warn!("the height of block_txs is {}, while self.height is {}", height, self.height);
+            return Err(BftError::MismatchingBlockTxs);
         }
         if need_wal {
             let msg: Vec<u8> = msg.try_into().unwrap();
             self.wal_log.save(height, LOG_TYPE_BLOCK_TXS, &msg).unwrap();
         }
         let block = self.build_feed_block(block_txs)?;
-        self.feed_block.push_back((height, block.clone()));
+        self.feed_block = Some(block.clone());
         let feed = extract_feed(&block);
         Ok(feed)
     }
@@ -560,16 +561,12 @@ impl Bft {
     fn build_signed_proposal(&mut self, proposal: BftProposal) -> BftResult<SignedProposal>{
         let height = proposal.height;
         let round = proposal.round;
-        let mut block = Block::new();
+        let block;
         if let Some(lock_round) = proposal.lock_round {
             let signed_proposal = self.proposals.get_proposal(height, lock_round).unwrap();
             block = signed_proposal.get_proposal().get_block().clone();
         } else {
-            for &(ref feed_height, ref feed_block) in &self.feed_block {
-                if *feed_height == height {
-                    block = feed_block.to_owned();
-                }
-            }
+            block = self.feed_block.clone().unwrap();
         };
         let mut proto_proposal = ProtoProposal::new();
         proto_proposal.set_block(block);
@@ -602,8 +599,7 @@ impl Bft {
     fn set_new_height(&mut self, height: usize) -> BftResult<()>{
         self.verified_proposals.clear();
 //        self.vote_recv_filter.clear();
-        self.feed_block = self.feed_block.iter().filter(|&&(hi, _)| hi >= height)
-            .cloned().collect();
+        self.feed_block = None;
         self.height = height + 1;
         if let Err(_) = self.wal_log.set_height(self.height){
             return Err(BftError::SetWalHeightFailed);
