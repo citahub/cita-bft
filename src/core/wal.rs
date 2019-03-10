@@ -120,6 +120,7 @@ impl Wal {
     }
 
     pub fn save(&mut self, height: usize, mtype: u8, msg: &[u8]) -> io::Result<usize> {
+        info!("Wal save mtype: {}, height: {}", mtype, height);
         if !self.height_fs.contains_key(&height) {
             // 2 more higher than current height, do not process it
             if height > self.current_height + 1 {

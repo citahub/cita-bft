@@ -423,7 +423,7 @@ impl Bft {
         }
         if need_wal {
             let msg: Vec<u8> = msg.try_into().unwrap();
-            self.wal_log.save(height, LOG_TYPE_BLOCK_TXS, &msg).unwrap();
+            self.wal_log.save(self.height, LOG_TYPE_BLOCK_TXS, &msg).unwrap();
         }
         let block = self.build_feed_block(block_txs)?;
         self.feed_block = Some(block.clone());
@@ -616,7 +616,7 @@ impl Bft {
             return Err(BftError::SelfPreHashNotReady);
         }
         let proof = self.proof.clone();
-        if (proof.is_default() || proof.height != self.height - 1) && self.height > INIT_HEIGHT {
+        if (proof.is_default() || proof.height != self.height - 1) && self.height > INIT_HEIGHT + 1 {
             return Err(BftError::SelfProofNotReady);
         }
         block.mut_header().set_proof(proof.into());
