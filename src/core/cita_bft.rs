@@ -128,19 +128,26 @@ impl Bft {
         }
     }
 
-    pub fn start(&mut self) -> BftResult<()>{
-        self.load_wal_log()?;
+    pub fn start(&mut self) {
+        if let Err(error) = self.load_wal_log(){
+            error!("{:?} happened!", error);
+        };
         loop {
             match self.receiver.recv() {
                 Ok(msg) => {
-                    let _ = self.process(msg)?;
+                    if let Err(error) = self.process(msg){
+                        warn!("{:?} happened!", error);
+                    };
                 }
-                _ => {}
+                _ => {
+                    warn!("Cita-bft receives message failed!");
+                }
             }
         }
     }
 
     fn process(&mut self, msg: MixMsg) -> BftResult<()>{
+        info!("Process message begin!");
         match msg {
             MixMsg::RabMsg(msg) => {
                 let (key, body) = msg;
@@ -151,11 +158,13 @@ impl Bft {
                     match msg_type {
                         routing_key!(Net >> SignedProposal) => {
                             let proposal = self.handle_signed_proposal(msg, true)?;
+                            info!("Send proposal {:?} to bft-rs!", proposal);
                             self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                         }
 
                         routing_key!(Net >> RawBytes) => {
                             let vote = self.handle_raw_bytes(msg, true)?;
+                            info!("Send vote {:?} to bft-rs!", vote);
                             self.cita2bft.send(BftMsg::Vote(vote)).unwrap();
                         }
 
@@ -165,6 +174,7 @@ impl Bft {
                     match msg_type {
                         routing_key!(Chain >> RichStatus) => {
                             let status = self.handle_rich_status(msg, true)?;
+                            info!("Send status {:?} to bft-rs!", status);
                             self.cita2bft.send(BftMsg::Status(status)).unwrap();
                             let height = self.height;//ProposalRoundCollector
                             let mut proposals = self.proposals.proposals.clone();
@@ -172,6 +182,7 @@ impl Bft {
                             if let Some(round_proposals) = round_proposals {
                                 for (_, signed_proposal) in round_proposals.round_proposals.clone().into_iter() {
                                     let proposal = self.handle_proposal_in_cache(signed_proposal)?;
+                                    info!("Send cached_proposal {:?} to bft-rs!", proposal);
                                     self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                                 }
                             };
@@ -185,6 +196,7 @@ impl Bft {
                                             let sender = Address::from_slice(&bft_vote.voter);
                                             self.check_raw_bytes_sender(height, &sender)?;
                                             let bft_vote: BftVote = bft_vote.clone();
+                                            info!("Send cached_vote {:?} to bft-rs!", bft_vote);
                                             self.cita2bft.send(BftMsg::Vote(bft_vote)).unwrap();
                                         }
                                     }
@@ -195,11 +207,13 @@ impl Bft {
 
                         routing_key!(Auth >> BlockTxs) => {
                             let feed = self.handle_block_txs(msg, true)?;
+                            info!("Send feed {:?} to bft-rs!", feed);
                             self.cita2bft.send(BftMsg::Feed(feed)).unwrap();
                         }
 
                         routing_key!(Auth >> VerifyBlockResp) => {
                             let proposal = self.handle_verify_block_resp(msg, true)?;
+                            info!("Send verified_proposal {:?} to bft-rs!", proposal);
                             self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                         }
 
@@ -211,6 +225,7 @@ impl Bft {
                 match msg {
                     BftMsg::Proposal(proposal) => {
                         let signed_proposal = self.handle_proposal(proposal, true)?;
+                        info!("Send signed_proposal {:?} to rabbit_mq!", signed_proposal);
                         self.cita2rab.send((
                             routing_key!(Consensus >> SignedProposal).into(),
                             signed_proposal.try_into().unwrap(),
@@ -220,6 +235,7 @@ impl Bft {
 
                     BftMsg::Vote(vote) => {
                         let signed_vote = self.handle_vote(vote, true)?;
+                        info!("Send signed_vote {:?} to rabbit_mq!", signed_vote);
                         self.cita2rab.send((
                             routing_key!(Consensus >> RawBytes).into(),
                             signed_vote.try_into().unwrap(),
@@ -228,6 +244,7 @@ impl Bft {
 
                     BftMsg::Commit(commit) => {
                         let block_with_proof = self.handle_commit(commit, true)?;
+                        info!("Send block_with_proof {:?} to rabbit_mq!", block_with_proof);
                         self.cita2rab.send((
                             routing_key!(Consensus >> BlockWithProof).into(),
                             block_with_proof.try_into().unwrap(),
@@ -431,10 +448,14 @@ impl Bft {
         self.auth_manage
             .receive_authorities_list(self.height, authorities.clone());
 
-        if authorities.contains(&self.signer.address) {
+        if authorities.contains(&self.signer.address) && !self.consensus_power{
+            info!("Get consensus power in height {} and wake up the bft-rs process!", height);
             self.consensus_power = true;
-        } else {
+            self.cita2bft.send(BftMsg::Continue).unwrap();
+        } else if !authorities.contains(&self.signer.address) && self.consensus_power{
+            info!("Lost consensus power in height {} and pause the bft-rs process!", height);
             self.consensus_power = false;
+            self.cita2bft.send(BftMsg::Pause).unwrap();
         }
 
         self.set_new_height(height)?;
@@ -654,7 +675,9 @@ impl Bft {
 
 
     fn load_wal_log(&mut self) -> BftResult<()>{
+        info!("Loading wal log!");
         let vec_buf = self.wal_log.load();
+        info!("The vec_buf is {:?}", &vec_buf);
         for (msg_type, msg) in vec_buf {
             match msg_type {
                 LOG_TYPE_SIGNED_PROPOSAL => {
@@ -692,7 +715,7 @@ impl Bft {
                 _ => {}
             }
         }
-
+        info!("Successfully load wal log!");
         Ok(())
     }
 
@@ -896,18 +919,18 @@ fn check_tx(tx: &Transaction, height: u64) -> BftResult<()> {
     Ok(())
 }
 
-#[inline]
-fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T> {
-    if let Ok(value) = result {
-        return Ok(value);
-    }
-    Err(err)
-}
-
-#[inline]
-fn safe_unwrap_option<T>(option: Option<T>, err: BftError) -> BftResult<T> {
-    if let Some(value) = option {
-        return Ok(value);
-    }
-    Err(err)
-}
+//#[inline]
+//fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T> {
+//    if let Ok(value) = result {
+//        return Ok(value);
+//    }
+//    Err(err)
+//}
+//
+//#[inline]
+//fn safe_unwrap_option<T>(option: Option<T>, err: BftError) -> BftResult<T> {
+//    if let Some(value) = option {
+//        return Ok(value);
+//    }
+//    Err(err)
+//}

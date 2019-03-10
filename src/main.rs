@@ -103,6 +103,8 @@ fn main() {
         )
         .get_matches();
 
+//    let bft_log_path = "logs/bft-rs.log";
+
     let mut pk_path = "privkey";
     if let Some(p) = matches.value_of("private") {
         trace!("Value for config: {}", p);
@@ -122,6 +124,7 @@ fn main() {
 
     let address: &[u8] = bft_signer.address.as_ref();
     let address = Vec::from(address);
+    info!("Address is {:?}", &address);
 
     let (rab2cita, cita4rab) = channel();
     let (cita2rab, rab4cita) = channel();
@@ -146,7 +149,7 @@ fn main() {
 
     let rab_sender = sender.clone();
 
-    thread::spawn(move || {
+    thread::spawn(move || loop {
         let (key, body) = cita4rab.recv().unwrap();
         rab_sender.send(MixMsg::RabMsg((key, body))).unwrap();
     });
@@ -154,19 +157,21 @@ fn main() {
 
     let bft_thread = {
         thread::spawn(move || {
+            info!("BFT-rs lib start!");
             AlgoBft::start(bft2cita, bft4cita, address);
         })
     };
 
-    thread::spawn(move || {
+    thread::spawn(move || loop {
         let msg = cita4bft.recv().unwrap();
         let sender = sender.clone();
         sender.send(MixMsg::BftMsg(msg)).unwrap();
     });
 
     let main_thread = thread::spawn(move || {
+        info!("BFT engine start!");
         let mut engine = Bft::new(cita2rab, cita2bft, receiver, signer);
-        let _ = engine.start();
+        engine.start();
     });
 
     bft_thread.join().unwrap();

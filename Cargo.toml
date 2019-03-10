@@ -24,7 +24,7 @@ logger = { git = "https://github.com/cryptape/cita-common.git", rev = "9a8a2978"
 authority_manage = { git = "https://github.com/cryptape/cita-common.git", rev = "9a8a2978" }
 rustc-hex = "1.0"
 crossbeam = "0.7"
-bft-rs = { git = "https://github.com/cryptape/bft-rs.git", branch = "develop" }
+bft-rs = { git = "https://github.com/cryptape/bft-rs.git", rev = "25b7d64f" }
 
 [build-dependencies]
 util = { git = "https://github.com/cryptape/cita-common.git", rev = "9a8a2978"}
