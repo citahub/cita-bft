@@ -890,6 +890,8 @@ impl Bft {
                     return Err(BftError::RepeatLockVote);
                 }
             }
+        } else {
+            return Ok(());
         }
 
         let p = &self.auth_manage;
