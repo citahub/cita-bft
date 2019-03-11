@@ -50,8 +50,8 @@ impl Wal {
         let cur_height: usize;
         let last_file_path: String;
         if res_fsize == 0 {
-            last_file_path = dir.to_string() + "/1.log";
-            cur_height = 1;
+            last_file_path = dir.to_string() + "/0.log";
+            cur_height = 0;
         } else {
             let hi_res = string_buf.parse::<usize>();
             if let Ok(hi) = hi_res {
