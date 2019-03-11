@@ -130,7 +130,7 @@ impl Bft {
 
     pub fn start(&mut self) {
         if let Err(error) = self.load_wal_log(){
-            error!("{:?} happened!", error);
+            warn!("{:?} happened!", error);
         };
         loop {
             match self.receiver.recv() {
@@ -147,7 +147,6 @@ impl Bft {
     }
 
     fn process(&mut self, msg: MixMsg) -> BftResult<()>{
-        info!("Process message begin!");
         match msg {
             MixMsg::RabMsg(msg) => {
                 let (key, body) = msg;
@@ -157,32 +156,38 @@ impl Bft {
                 if from_broadcast && self.consensus_power {
                     match msg_type {
                         routing_key!(Net >> SignedProposal) => {
+                            info!("Receive signed_proposal message!");
                             let proposal = self.handle_signed_proposal(msg, true)?;
-                            info!("Send proposal {:?} to bft-rs!", proposal);
+                            info!("Send bft_proposal {:?} to bft-rs!", proposal);
                             self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                         }
 
                         routing_key!(Net >> RawBytes) => {
+                            info!("Receive raw_bytes message!");
                             let vote = self.handle_raw_bytes(msg, true)?;
-                            info!("Send vote {:?} to bft-rs!", vote);
+                            info!("Send bft_vote {:?} to bft-rs!", vote);
                             self.cita2bft.send(BftMsg::Vote(vote)).unwrap();
                         }
 
-                        _ => {}
+                        _ => {
+                            warn!("Receive a message with wrong type!");
+                        }
                     }
                 } else {
                     match msg_type {
                         routing_key!(Chain >> RichStatus) => {
+                            info!("Receive rich_status message!");
                             let status = self.handle_rich_status(msg, true)?;
-                            info!("Send status {:?} to bft-rs!", status);
+                            info!("Send bft_status {:?} to bft-rs!", status);
                             self.cita2bft.send(BftMsg::Status(status)).unwrap();
                             let height = self.height;//ProposalRoundCollector
                             let mut proposals = self.proposals.proposals.clone();
                             let mut round_proposals = proposals.get_mut(&height);
                             if let Some(round_proposals) = round_proposals {
                                 for (_, signed_proposal) in round_proposals.round_proposals.clone().into_iter() {
+                                    info!("Handle signed_proposal message in cache!");
                                     let proposal = self.handle_proposal_in_cache(signed_proposal)?;
-                                    info!("Send cached_proposal {:?} to bft-rs!", proposal);
+                                    info!("Send cached bft_proposal {:?} to bft-rs!", proposal);
                                     self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                                 }
                             };
@@ -193,10 +198,11 @@ impl Bft {
                                 for (_, step_votes) in round_votes.round_votes.iter() {
                                     for (_, vote_set) in step_votes.step_votes.iter() {
                                         for (bft_vote, _) in vote_set.vote_pair.iter() {
+                                            info!("Handle bft_vote message in cache!");
                                             let sender = Address::from_slice(&bft_vote.voter);
                                             self.check_raw_bytes_sender(height, &sender)?;
                                             let bft_vote: BftVote = bft_vote.clone();
-                                            info!("Send cached_vote {:?} to bft-rs!", bft_vote);
+                                            info!("Send cached bft_vote {:?} to bft-rs!", bft_vote);
                                             self.cita2bft.send(BftMsg::Vote(bft_vote)).unwrap();
                                         }
                                     }
@@ -206,48 +212,58 @@ impl Bft {
                         }
 
                         routing_key!(Auth >> BlockTxs) => {
+                            info!("Receive block_txs message!");
                             let feed = self.handle_block_txs(msg, true)?;
-                            info!("Send feed {:?} to bft-rs!", feed);
+                            info!("Send bft_feed {:?} to bft-rs!", feed);
                             self.cita2bft.send(BftMsg::Feed(feed)).unwrap();
                         }
 
                         routing_key!(Auth >> VerifyBlockResp) => {
+                            info!("Receive verify_block_resp message!");
                             let proposal = self.handle_verify_block_resp(msg, true)?;
-                            info!("Send verified_proposal {:?} to bft-rs!", proposal);
+                            info!("Send verified bft_proposal {:?} to bft-rs!", proposal);
                             self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
                         }
 
-                        _ => {}
+                        _ => {
+                            warn!("Receive a message with wrong type!");
+                        }
                     }
                 }
             },
             MixMsg::BftMsg(msg) => {
                 match msg {
                     BftMsg::Proposal(proposal) => {
+                        info!("Receive bft_proposal message!");
                         let signed_proposal = self.handle_proposal(proposal, true)?;
                         info!("Send signed_proposal {:?} to rabbit_mq!", signed_proposal);
+                        let msg: Message = signed_proposal.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> SignedProposal).into(),
-                            signed_proposal.try_into().unwrap(),
+                            msg.try_into().unwrap(),
                         )).unwrap();
 
                     }
 
                     BftMsg::Vote(vote) => {
-                        let signed_vote = self.handle_vote(vote, true)?;
-                        info!("Send signed_vote {:?} to rabbit_mq!", signed_vote);
+                        info!("Receive bft_vote message!");
+                        let raw_bytes = self.handle_vote(vote, true)?;
+                        info!("Send raw_bytes {:?} to rabbit_mq!", raw_bytes);
+                        let msg: Message = raw_bytes.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> RawBytes).into(),
-                            signed_vote.try_into().unwrap(),
+                            msg.try_into().unwrap(),
                         )).unwrap();
                     }
 
                     BftMsg::Commit(commit) => {
+                        info!("Receive bft_commit message!");
                         let block_with_proof = self.handle_commit(commit, true)?;
                         info!("Send block_with_proof {:?} to rabbit_mq!", block_with_proof);
+                        let msg: Message = block_with_proof.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> BlockWithProof).into(),
-                            block_with_proof.try_into().unwrap(),
+                            msg.try_into().unwrap(),
                         )).unwrap();
                     }
 
@@ -267,6 +283,7 @@ impl Bft {
         let height = proto_proposal.get_height() as usize;
         let round = proto_proposal.get_round() as usize;
         if height < self.height - 1 {
+            warn!("The height of signed_proposal is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteSignedProposal);
         }
 
@@ -287,6 +304,7 @@ impl Bft {
                 self.proposals.add(height, round, &signed_proposal);
             }
             if height > self.height {
+                warn!("The height of signed_proposal is {} which is higher than self.height {}!", height, self.height);
                 return Err(BftError::HigherProposal);
             }
         }
@@ -348,6 +366,7 @@ impl Bft {
     fn handle_verify_block_resp(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftProposal> {
         let resp = msg.take_verify_block_resp().unwrap();
         if resp.get_ret() != auth::Ret::OK {
+            warn!("The block failed to pass the verification of Auth!");
             return Err(BftError::AuthVerifyFailed);
         }
         let verify_id = resp.get_id();
@@ -355,6 +374,7 @@ impl Bft {
         let height = height as usize;
         let round = round as usize;
         if height < self.height {
+            warn!("The height of verify_block_resp is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteVerifyBlockResp);
         }
         if need_wal {
@@ -384,9 +404,11 @@ impl Bft {
         let round = round as usize;
         let sender = Address::from_slice(&sender);
         if height < self.height - 1 {
+            warn!("The height of raw_bytes is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteRawBytes);
         }
         if sender != address {
+            warn!("The address recovers from the signature is {:?} which is mismatching with the sender {:?}!", &address, &sender);
             return Err(BftError::MismatchingVoter);
         }
 
@@ -402,15 +424,12 @@ impl Bft {
                 self.votes.add(height, round, step, &bft_vote, &signed_vote);
             }
             if height > self.height {
+                warn!("The height of raw_bytes is {} which is higher than self.height {}!", height, self.height);
                 return Err(BftError::HigherRawBytes);
             }
         }
 
         self.check_raw_bytes_sender(height, &sender)?;
-        if height < self.height {
-            return Ok(bft_vote);
-        }
-    //        self.check_filter(sender, round, step)?;
         Ok(bft_vote)
     }
 
@@ -435,6 +454,7 @@ impl Bft {
         let rich_status = msg.take_rich_status().unwrap();
         let height = rich_status.height as usize;
         if height < self.height {
+            warn!("The height of rich_status is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteRichStatus);
         }
         if need_wal {
@@ -468,6 +488,7 @@ impl Bft {
         let height = proposal.height;
         let round = proposal.round;
         if height < self.height {
+            warn!("The height of bft_proposal is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteBftProposal);
         }
         if need_wal {
@@ -482,6 +503,7 @@ impl Bft {
     fn handle_vote(&mut self, vote: BftVote, need_wal: bool) -> BftResult<RawBytes> {
         let height = vote.height;
         if height < self.height {
+            warn!("The height of bft_vote is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteBftVote);
         }
         if need_wal {
@@ -497,6 +519,7 @@ impl Bft {
     fn handle_commit(&mut self, commit: Commit, need_wal: bool) -> BftResult<BlockWithProof>{
         let height = commit.height;
         if height < self.height {
+            warn!("The height of bft_commit is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteCommit);
         }
         if need_wal {
@@ -512,8 +535,7 @@ impl Bft {
         let msg = serialize(&(vote.height as u64, vote.round as u64, vote.vote_type, vote.voter, vote.proposal), Infinite).unwrap();
         let signature = Signature::sign(author.keypair.privkey(), &msg.crypt_hash()).unwrap();
         let sig = signature.clone();
-        let msg = serialize(&(msg, sig), Infinite).unwrap();
-        let raw_bytes: RawBytes = msg.try_into().unwrap();
+        let raw_bytes = serialize(&(msg, sig), Infinite).unwrap();
         Ok(raw_bytes)
     }
 
@@ -543,10 +565,12 @@ impl Bft {
                         let sender = Address::from_slice(&vote.voter);
                         commits.insert(sender, signed_vote.signature.clone());
                     } else {
+                        warn!("Generate proof failed!");
                         return Err(BftError::GenerateProofFailed);
                     }
                 }
             } else {
+                warn!("Generate proof failed!");
                 return Err(BftError::GenerateProofFailed);
             }
         }
@@ -602,6 +626,7 @@ impl Bft {
         self.feed_block = None;
         self.height = height + 1;
         if let Err(_) = self.wal_log.set_height(self.height){
+            warn!("Wal log set height {} failed!", self.height);
             return Err(BftError::SetWalHeightFailed);
         };
         Ok(())
@@ -613,10 +638,12 @@ impl Bft {
         if self.pre_hash.is_some() {
             block.mut_header().set_prevhash(self.pre_hash.unwrap().0.to_vec());
         } else {
+            warn!("Self.pre_hash is not ready!");
             return Err(BftError::SelfPreHashNotReady);
         }
         let proof = self.proof.clone();
         if (proof.is_default() || proof.height != self.height - 1) && self.height > INIT_HEIGHT + 1 {
+            warn!("Self.proof is not ready!");
             return Err(BftError::SelfProofNotReady);
         }
         block.mut_header().set_proof(proof.into());
@@ -655,6 +682,7 @@ impl Bft {
 
     fn send_auth_for_validation(&mut self, block: &Block, height: usize, round: usize) -> BftResult<()>  {
         if height != self.height {
+            warn!("The height {} is not equal to self.height {}, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let reqid = gen_reqid_from_idx(height as u64, round as u64);
@@ -673,61 +701,71 @@ impl Bft {
     fn load_wal_log(&mut self) -> BftResult<()>{
         info!("Loading wal log!");
         let vec_buf = self.wal_log.load();
-        info!("The vec_buf is {:?}", &vec_buf);
         for (msg_type, msg) in vec_buf {
             match msg_type {
                 LOG_TYPE_SIGNED_PROPOSAL => {
+                    info!("Load signed_proposal!");
                     let msg = Message::try_from(msg).unwrap();
                     self.handle_signed_proposal(msg, false)?;
                 }
                 LOG_TYPE_RAW_BYTES => {
+                    info!("Load raw_bytes!");
                     let msg = Message::try_from(msg).unwrap();
                     self.handle_raw_bytes(msg, false)?;
                 }
                 LOG_TYPE_RICH_STATUS => {
+                    info!("Load rich_status!");
                     let msg = Message::try_from(msg).unwrap();
                     self.handle_rich_status(msg, false)?;
                 }
                 LOG_TYPE_BLOCK_TXS => {
+                    info!("Load block_txs!");
                     let msg = Message::try_from(msg).unwrap();
                     self.handle_block_txs(msg, false)?;
                 }
                 LOG_TYPE_VERIFY_BLOCK_PESP => {
+                    info!("Load verify_block_resp!");
                     let msg = Message::try_from(msg).unwrap();
                     self.handle_verify_block_resp(msg, false)?;
                 }
                 LOG_TYPE_PROPOSAL => {
+                    info!("Load bft_proposal!");
                     let proposal = deserialize(&msg[..]).unwrap();
                     self.handle_proposal(proposal, false)?;
                 }
                 LOG_TYPE_VOTE => {
+                    info!("Load bft_vote!");
                     let vote = deserialize(&msg[..]).unwrap();
                     self.handle_vote(vote, false)?;
                 }
                 LOG_TYPE_COMMIT => {
+                    info!("Load bft_commit!");
                     let commit = deserialize(&msg[..]).unwrap();
                     self.handle_commit(commit, false)?;
                 }
                 _ => {}
             }
         }
-        info!("Successfully load wal log!");
+        info!("Successfully process the whole wal log!");
         Ok(())
     }
 
 
     fn check_proposer(&self, height: usize, round: usize, address: &Address) -> BftResult<()> {
         if height < self.height - 1 {
+            warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let p = &self.auth_manage;
         let mut authority_n = &p.authority_n;
         let mut authorities = &p.authorities;
         if height == *(&p.authority_h_old) {
+            info!("Set the authority manage with old authorities!");
             authority_n = &p.authority_n_old;
             authorities = &p.authorities_old;
         }
         if *authority_n == 0 {
+            warn!("The size of authority manage is empty!");
             return Err(BftError::EmptyAuthManage);
         }
         let proposer_nonce = height + round;
@@ -737,20 +775,24 @@ impl Bft {
         if proposer == address {
             Ok(())
         } else {
+            warn!("The proposer is invalid, while the rightful proposer is {:?}", proposer);
             Err(BftError::InvalidProposer)
         }
     }
 
     fn check_raw_bytes_sender(&self, height: usize, sender: &Address) -> BftResult<()> {
         if height < self.height - 1 {
+            warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let p = &self.auth_manage;
         let mut authorities = &p.authorities;
         if height == *(&p.authority_h_old) {
+            info!("Set the authority manage with old authorities!");
             authorities = &p.authorities_old;
         }
         if !authorities.contains(sender) {
+            warn!("The raw_bytes have invalid voter {:?}!", &sender);
             return Err(BftError::InvalidVoter);
         }
         Ok(())
@@ -758,21 +800,26 @@ impl Bft {
 
     fn check_pre_hash(&self, height: usize, block: &Block) -> BftResult<()> {
         if height != self.height {
+            warn!("The height {} is not equal to self.height {}, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         if let Some(hash) = self.pre_hash {
             let mut block_prehash = Vec::new();
             block_prehash.extend_from_slice(block.get_header().get_prevhash());
-            if hash != H256::from(block_prehash.as_slice()) {
+            let pre_hash = H256::from(block_prehash.as_slice());
+            if hash != pre_hash {
+                warn!("The pre_hash of the block is {:?} which is not equal to self.pre_hash {:?}!", &hash, &pre_hash);
                 return Err(BftError::MisMatchingPreHash);
             }
             return Ok(());
         }
+        warn!("Self.pre_hash is empty!");
         Err(BftError::EmptySelfPreHash)
     }
 
     fn check_proof(&mut self, height: usize, block: &Block) -> BftResult<()> {
         if height != self.height {
+            warn!("The height {} is less than self.height {}, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let block_proof = block.get_header().get_proof();
@@ -780,9 +827,11 @@ impl Bft {
 
         if self.auth_manage.authority_h_old == height - 1 {
             if !proof.check(height - 1, &self.auth_manage.authorities_old) {
+                warn!("The proof of the block verified failed!");
                 return Err(BftError::InvalidProof);
             }
         } else if !proof.check(height - 1, &self.auth_manage.authorities) {
+            warn!("The proof of the block verified failed!");
             return Err(BftError::InvalidProof);
         }
 
@@ -795,6 +844,7 @@ impl Bft {
     fn check_lock_votes(&mut self, proto_proposal: &ProtoProposal, proposal_hash: &H256) -> BftResult<()> {
         let height = proto_proposal.get_height() as usize;
         if height < self.height - 1 {
+            warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
 
@@ -824,22 +874,26 @@ impl Bft {
 
     fn check_proto_vote(&mut self, height: usize, round: usize, proposal_hash: &H256, vote: &ProtoVote) -> BftResult<Address> {
         if height < self.height - 1 {
+            warn!("The vote's height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
 
         let p = &self.auth_manage;
         let mut authorities = &p.authorities;
         if height == *(&p.authority_h_old) {
+            info!("Set the authority manage with old authorities!");
             authorities = &p.authorities_old;
         }
 
         let hash = H256::from_slice(vote.get_proposal());
         if hash != *proposal_hash {
+            warn!("The lock votes of proposal {} contains vote for other proposal hash {:?}!", proposal_hash, &hash);
             return Err(BftError::MismatchingVoteProposal);
         }
 
         let sender = Address::from_slice(vote.get_sender());
         if !authorities.contains(&sender) {
+            warn!("The lock votes contains vote with invalid voter {:?}!", &sender);
             return Err(BftError::InvalidVoter);
         }
 
@@ -850,6 +904,7 @@ impl Bft {
         let signature = Signature::from(signature);
         let address = check_signature(&signature, &hash)?;
         if address != sender {
+            warn!("The address recovers from the signature is {:?} which is mismatching with the sender {:?}!", &address, &sender);
             return Err(BftError::MismatchingVoter);
         }
 
@@ -874,6 +929,7 @@ fn get_idx_from_reqid(reqid: u64) -> (u64, u64) {
 fn check_signature_len(signature: &[u8]) -> BftResult<()> {
     let len = signature.len();
     if len != SIGNATURE_BYTES_LEN {
+        warn!("The length of signature is {} which is not equal to valid length of {}!", len, SIGNATURE_BYTES_LEN);
         return Err(BftError::InvalidSigLen);
     }
     Ok(())
@@ -884,6 +940,7 @@ fn check_signature(signature: &Signature, hash: &H256) -> BftResult<Address> {
         let address = pubkey_to_address(&pubkey);
         return Ok(address);
     }
+    warn!("The signature verified failed!");
     Err(BftError::InvalidSignature)
 }
 
@@ -891,6 +948,7 @@ fn check_block_txs(block: &Block, height: usize) -> BftResult<()> {
     let transactions = block.get_body().get_transactions();
     let verify_ok = block.check_hash();
     if !verify_ok {
+        warn!("The transaction root verified failed!");
         return Err(BftError::TransactionRootCheckFailed);
     }
     for tx in transactions.into_iter() {
@@ -902,14 +960,17 @@ fn check_block_txs(block: &Block, height: usize) -> BftResult<()> {
 fn check_tx(tx: &Transaction, height: u64) -> BftResult<()> {
     let to = clean_0x(tx.get_to());
     if !to.is_empty() && Address::from_str(to).is_err() {
+        warn!("The receiver's address of the transaction is invalid!");
         return Err(BftError::InvalidTxTo);
     }
     let nonce = tx.get_nonce();
     if nonce.len() > 128 {
+        warn!("The nonce of the transaction is invalid!");
         return Err(BftError::InvalidTxNonce);
     }
     let valid_until_block = tx.get_valid_until_block();
     if height > valid_until_block || valid_until_block >= (height + BLOCKLIMIT) {
+        warn!("The valid_util_block of the transaction is invalid!");
         return Err(BftError::InvalidUtilBlock);
     }
     Ok(())
