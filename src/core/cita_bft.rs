@@ -129,9 +129,7 @@ impl Bft {
     }
 
     pub fn start(&mut self) {
-        if let Err(error) = self.load_wal_log(){
-            warn!("{:?} happened!", error);
-        };
+        self.load_wal_log();
         loop {
             match self.receiver.recv() {
                 Ok(msg) => {
@@ -242,7 +240,6 @@ impl Bft {
                             routing_key!(Consensus >> SignedProposal).into(),
                             msg.try_into().unwrap(),
                         )).unwrap();
-
                     }
 
                     BftMsg::Vote(vote) => {
@@ -698,7 +695,7 @@ impl Bft {
     }
 
 
-    fn load_wal_log(&mut self) -> BftResult<()>{
+    fn load_wal_log(&mut self) {
         info!("Loading wal log!");
         let vec_buf = self.wal_log.load();
         for (msg_type, msg) in vec_buf {
@@ -706,48 +703,83 @@ impl Bft {
                 LOG_TYPE_SIGNED_PROPOSAL => {
                     info!("Load signed_proposal!");
                     let msg = Message::try_from(msg).unwrap();
-                    self.handle_signed_proposal(msg, false)?;
+                    if let Ok(proposal) = self.handle_signed_proposal(msg, false){
+                        info!("Send bft_proposal {:?} to bft-rs!", proposal);
+                        self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
+                    };
                 }
                 LOG_TYPE_RAW_BYTES => {
                     info!("Load raw_bytes!");
                     let msg = Message::try_from(msg).unwrap();
-                    self.handle_raw_bytes(msg, false)?;
+                    if let Ok(vote) = self.handle_raw_bytes(msg, false) {
+                        info!("Send bft_vote {:?} to bft-rs!", vote);
+                        self.cita2bft.send(BftMsg::Vote(vote)).unwrap();
+                    };
                 }
                 LOG_TYPE_RICH_STATUS => {
                     info!("Load rich_status!");
                     let msg = Message::try_from(msg).unwrap();
-                    self.handle_rich_status(msg, false)?;
+                    if let Ok(status) = self.handle_rich_status(msg, false) {
+                        info!("Send bft_status {:?} to bft-rs!", status);
+                        self.cita2bft.send(BftMsg::Status(status)).unwrap();
+                    };
                 }
                 LOG_TYPE_BLOCK_TXS => {
                     info!("Load block_txs!");
                     let msg = Message::try_from(msg).unwrap();
-                    self.handle_block_txs(msg, false)?;
+                    if let Ok(feed) = self.handle_block_txs(msg, false) {
+                        info!("Send bft_feed {:?} to bft-rs!", feed);
+                        self.cita2bft.send(BftMsg::Feed(feed)).unwrap();
+                    };
                 }
                 LOG_TYPE_VERIFY_BLOCK_PESP => {
                     info!("Load verify_block_resp!");
                     let msg = Message::try_from(msg).unwrap();
-                    self.handle_verify_block_resp(msg, false)?;
+                    if let Ok(proposal) = self.handle_verify_block_resp(msg, false) {
+                        info!("Send verified bft_proposal {:?} to bft-rs!", proposal);
+                        self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
+                    };
                 }
                 LOG_TYPE_PROPOSAL => {
                     info!("Load bft_proposal!");
                     let proposal = deserialize(&msg[..]).unwrap();
-                    self.handle_proposal(proposal, false)?;
+                    if let Ok(signed_proposal) = self.handle_proposal(proposal, false) {
+                        info!("Send signed_proposal {:?} to rabbit_mq!", signed_proposal);
+                        let msg: Message = signed_proposal.into();
+                        self.cita2rab.send((
+                            routing_key!(Consensus >> SignedProposal).into(),
+                            msg.try_into().unwrap(),
+                        )).unwrap();
+                    };
                 }
                 LOG_TYPE_VOTE => {
                     info!("Load bft_vote!");
                     let vote = deserialize(&msg[..]).unwrap();
-                    self.handle_vote(vote, false)?;
+                    if let Ok(raw_bytes) = self.handle_vote(vote, false) {
+                        info!("Send raw_bytes {:?} to rabbit_mq!", raw_bytes);
+                        let msg: Message = raw_bytes.into();
+                        self.cita2rab.send((
+                            routing_key!(Consensus >> RawBytes).into(),
+                            msg.try_into().unwrap(),
+                        )).unwrap();
+                    };
                 }
                 LOG_TYPE_COMMIT => {
                     info!("Load bft_commit!");
                     let commit = deserialize(&msg[..]).unwrap();
-                    self.handle_commit(commit, false)?;
+                    if let Ok(block_with_proof) = self.handle_commit(commit, true) {
+                        info!("Send block_with_proof {:?} to rabbit_mq!", block_with_proof);
+                        let msg: Message = block_with_proof.into();
+                        self.cita2rab.send((
+                            routing_key!(Consensus >> BlockWithProof).into(),
+                            msg.try_into().unwrap(),
+                        )).unwrap();
+                    };
                 }
                 _ => {}
             }
         }
         info!("Successfully process the whole wal log!");
-        Ok(())
     }
 
 
