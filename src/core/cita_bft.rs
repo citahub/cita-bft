@@ -279,7 +279,7 @@ impl Bft {
         let proto_proposal = signed_proposal.get_proposal();
         let height = proto_proposal.get_height() as usize;
         let round = proto_proposal.get_round() as usize;
-        if height < self.height - 1 {
+        if self.height > 0 && height < self.height - 1 {
             warn!("The height of signed_proposal is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteSignedProposal);
         }
@@ -396,11 +396,8 @@ impl Bft {
         let address = check_signature(&signature, &hash)?;
 
         let decoded = deserialize(&message[..]).unwrap();
-        let (height, round, step, sender, _):(u64, u64, Step, Vec<u8>, Vec<u8>) = decoded;
-        let height = height as usize;
-        let round = round as usize;
-        let sender = Address::from_slice(&sender);
-        if height < self.height - 1 {
+        let (height, round, step, sender, _):(usize, usize, Step, Address, Option<H256>) = decoded;
+        if self.height > 0 && height < self.height - 1 {
             warn!("The height of raw_bytes is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteRawBytes);
         }
@@ -433,7 +430,7 @@ impl Bft {
     fn handle_block_txs(&mut self, mut msg: Message, need_wal: bool) -> BftResult<Feed> {
         let block_txs = msg.take_block_txs().unwrap();
         let height = block_txs.get_height() as usize;
-        if height != self.height - 1 {
+        if self.height > 0 && height != self.height - 1 {
             warn!("the height of block_txs is {}, while self.height is {}", height, self.height);
             return Err(BftError::MismatchingBlockTxs);
         }
@@ -529,7 +526,13 @@ impl Bft {
 
     fn build_raw_bytes(&mut self, vote: BftVote) -> BftResult<RawBytes>{
         let author = &self.signer;
-        let msg = serialize(&(vote.height as u64, vote.round as u64, vote.vote_type, vote.voter, vote.proposal), Infinite).unwrap();
+        let sender = Address::from_slice(&vote.voter);
+        let proposal: Option<H256> = if vote.proposal.len() != 0 {
+            Some(H256::from_slice(&vote.proposal))
+        } else {
+            None
+        };
+        let msg = serialize(&(vote.height, vote.round, vote.vote_type, sender, proposal), Infinite).unwrap();
         let signature = Signature::sign(author.keypair.privkey(), &msg.crypt_hash()).unwrap();
         let sig = signature.clone();
         let raw_bytes = serialize(&(msg, sig), Infinite).unwrap();
@@ -553,7 +556,8 @@ impl Bft {
     }
 
     fn generate_proof(&mut self, height: usize, round: usize, hash: H256, lock_votes: Vec<BftVote>) -> BftResult<BftProof> {
-        let mut commits = HashMap::<Address, Signature>::new();
+        info!("Generate proof from lock_votes of bft_commit! ");
+        let mut commits = HashMap::new();
         {
             let vote_set = self.votes.get_vote_set(height, round, Step::Precommit);
             if let Some(vote_set) = vote_set {
@@ -562,12 +566,12 @@ impl Bft {
                         let sender = Address::from_slice(&vote.voter);
                         commits.insert(sender, signed_vote.signature.clone());
                     } else {
-                        warn!("Generate proof failed!");
+                        warn!("Generate proof failed! Search a lock_vote of bft_commit from self.votes failed! ");
                         return Err(BftError::GenerateProofFailed);
                     }
                 }
             } else {
-                warn!("Generate proof failed!");
+                warn!("Generate proof failed! The whole of lock_votes failed searching from self.votes! ");
                 return Err(BftError::GenerateProofFailed);
             }
         }
@@ -639,7 +643,7 @@ impl Bft {
             return Err(BftError::SelfPreHashNotReady);
         }
         let proof = self.proof.clone();
-        if (proof.is_default() || proof.height != self.height - 1) && self.height > INIT_HEIGHT + 1 {
+        if self.height > 0 && (proof.is_default() || proof.height != self.height - 1) {
             warn!("Self.proof is not ready!");
             return Err(BftError::SelfProofNotReady);
         }
@@ -784,7 +788,7 @@ impl Bft {
 
 
     fn check_proposer(&self, height: usize, round: usize, address: &Address) -> BftResult<()> {
-        if height < self.height - 1 {
+        if self.height > 0 && height < self.height - 1 {
             warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
@@ -813,7 +817,7 @@ impl Bft {
     }
 
     fn check_raw_bytes_sender(&self, height: usize, sender: &Address) -> BftResult<()> {
-        if height < self.height - 1 {
+        if self.height > 0 && height < self.height - 1 {
             warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
@@ -859,15 +863,16 @@ impl Bft {
 
         if self.auth_manage.authority_h_old == height - 1 {
             if !proof.check(height - 1, &self.auth_manage.authorities_old) {
-                warn!("The proof of the block verified failed!");
+                warn!("The proof of the block verified failed with old authorities!");
                 return Err(BftError::InvalidProof);
             }
         } else if !proof.check(height - 1, &self.auth_manage.authorities) {
-            warn!("The proof of the block verified failed!");
+            warn!("The proof of the block verified failed with newest authorities!");
             return Err(BftError::InvalidProof);
         }
 
         if self.proof.height != height - 1 {
+            info!("Set self.proof from received signed_proposal!");
             self.proof = proof;
         }
         Ok(())
@@ -875,7 +880,7 @@ impl Bft {
 
     fn check_lock_votes(&mut self, proto_proposal: &ProtoProposal, proposal_hash: &H256) -> BftResult<()> {
         let height = proto_proposal.get_height() as usize;
-        if height < self.height - 1 {
+        if self.height > 0 && height < self.height - 1 {
             warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
@@ -907,7 +912,7 @@ impl Bft {
     }
 
     fn check_proto_vote(&mut self, height: usize, round: usize, proposal_hash: &H256, vote: &ProtoVote) -> BftResult<Address> {
-        if height < self.height - 1 {
+        if self.height > 0 && height < self.height - 1 {
             warn!("The vote's height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }

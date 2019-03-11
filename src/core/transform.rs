@@ -24,6 +24,7 @@ use libproto::blockchain::{Block, RichStatus};
 use libproto::consensus::SignedProposal;
 use libproto::RawBytes;
 use std::convert::TryInto;
+use types::{Address, H256};
 use util::Hashable;
 
 pub fn extract_bft_proposal(signed_proposal: &SignedProposal) -> BftProposal {
@@ -77,9 +78,9 @@ pub fn extract_signed_vote(raw_bytes: &RawBytes) -> SignedVote {
     let (message, signature): (Vec<u8>, &[u8]) = decoded;
     let signature = Signature::from(signature);
     let decoded = deserialize(&message[..]).unwrap();
-    let (_, _, _, _, hash):(u64, u64, Step, Vec<u8>, Vec<u8>) = decoded;
+    let (_, _, _, _, proposal):(usize, usize, Step, Address, Option<H256>) = decoded;
     SignedVote{
-        proposal: hash,
+        proposal,
         signature,
     }
 }
@@ -88,13 +89,19 @@ pub fn extract_bft_vote(raw_bytes: &RawBytes) -> BftVote {
     let decoded = deserialize(raw_bytes).unwrap();
     let (message, _): (Vec<u8>, &[u8]) = decoded;
     let decoded = deserialize(&message[..]).unwrap();
-    let (height, round, step, sender, hash):(u64, u64, Step, Vec<u8>, Vec<u8>) = decoded;
+    let (height, round, step, sender, proposal):(usize, usize, Step, Address, Option<H256>) = decoded;
+    let bft_proposal;
+    if let Some(proposal) = proposal {
+        bft_proposal = proposal.0.to_vec();
+    } else {
+        bft_proposal = Vec::new();
+    }
     BftVote{
         vote_type: step,
-        height: height as usize,
-        round: round as usize,
-        proposal: hash,
-        voter: sender,
+        height,
+        round,
+        proposal: bft_proposal,
+        voter: sender.0.to_vec(),
     }
 }
 

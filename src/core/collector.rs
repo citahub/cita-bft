@@ -21,6 +21,7 @@ use crypto::Signature;
 use libproto::consensus::SignedProposal;
 use lru_cache::LruCache;
 use std::collections::HashMap;
+use types::H256;
 
 pub const CACHE_NUMBER: usize = 16;
 
@@ -148,7 +149,7 @@ impl VoteSet {
 
 #[derive(Clone, Debug)]
 pub struct SignedVote {
-    pub proposal: Vec<u8>,
+    pub proposal: Option<H256>,
     pub signature: Signature,
 }
 
