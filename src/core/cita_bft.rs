@@ -1601,14 +1601,14 @@ impl Bft {
                     self.receive_new_status(&rich_status);
                     let authorities: Vec<Address> = rich_status
                         .get_nodes()
-                        .into_iter()
+                        .iter()
                         .map(|node| Address::from_slice(node))
                         .collect();
                     trace!("authorities: [{:?}]", authorities);
 
                     let validators: Vec<Address> = rich_status
                         .get_validators()
-                        .into_iter()
+                        .iter()
                         .map(|node| Address::from_slice(node))
                         .collect();
                     trace!("validators: [{:?}]", validators);
