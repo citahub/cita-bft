@@ -453,7 +453,7 @@ impl Bft {
         }
         if need_wal {
             let msg: Vec<u8> = msg.try_into().unwrap();
-            self.wal_log.save(height, LOG_TYPE_RICH_STATUS, &msg).unwrap();
+            self.wal_log.save(height + 1, LOG_TYPE_RICH_STATUS, &msg).unwrap();
         }
         let pre_hash = H256::from_slice(&rich_status.hash);
         self.pre_hash = Some(pre_hash);
