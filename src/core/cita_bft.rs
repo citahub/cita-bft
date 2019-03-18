@@ -16,8 +16,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use authority_manage::AuthorityManage;
-use bft_rs::algorithm::Step;
-use bft_rs::{BftMsg, Commit, Feed, Proposal as BftProposal, Status as BftStatus, Vote as BftVote};
+use bft_rs::{BftMsg, Commit, Feed, Proposal as BftProposal, Status as BftStatus, Vote as BftVote, VoteType};
 use bincode::{deserialize, Infinite, serialize};
 use core::collector::{ProposalCollector, VoteCollector, CACHE_NUMBER};
 use core::error::BftError;
@@ -410,7 +409,7 @@ impl Bft {
         let address = check_signature(&signature, &hash)?;
 
         let decoded = safe_unwrap_result(deserialize(&message[..]), BftError::DeserializeFailed)?;
-        let (height, round, step, sender, _):(usize, usize, Step, Address, Option<H256>) = decoded;
+        let (height, round, vote_type, sender, _):(usize, usize, VoteType, Address, Option<H256>) = decoded;
         if height < self.height - 1 {
             warn!("The height of raw_bytes is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteRawBytes);
@@ -431,7 +430,7 @@ impl Bft {
                         return Err(BftError::SaveWalLogFailed);
                     }
                 }
-                self.votes.add(height, round, step, &bft_vote, &signed_vote);
+                self.votes.add(height, round, vote_type, &bft_vote, &signed_vote);
             }
             if height > self.height {
                 warn!("The height of raw_bytes is {} which is higher than self.height {}!", height, self.height);
@@ -488,7 +487,7 @@ impl Bft {
         if authorities.contains(&self.signer.address) && !self.consensus_power{
             info!("Get consensus power in height {} and wake up the bft-rs process!", height);
             self.consensus_power = true;
-            let send_result = self.cita2bft.send(BftMsg::Continue);
+            let send_result = self.cita2bft.send(BftMsg::Start);
             safe_unwrap_result(send_result, BftError::SendFailed)?;
         } else if !authorities.contains(&self.signer.address) && self.consensus_power{
             info!("Lost consensus power in height {} and pause the bft-rs process!", height);
@@ -534,7 +533,7 @@ impl Bft {
         }
         let raw_bytes = self.build_raw_bytes(vote.clone())?;
         let signed_vote = extract_signed_vote(&raw_bytes)?;
-        self.votes.add(height, vote.round, vote.vote_type, &vote, &signed_vote);
+        self.votes.add(height, vote.round, vote.vote_type.clone(), &vote, &signed_vote);
         Ok(raw_bytes)
     }
 
@@ -593,7 +592,7 @@ impl Bft {
         info!("Generate proof from lock_votes of bft_commit! ");
         let mut commits = HashMap::new();
         {
-            let vote_set = self.votes.get_vote_set(height, round, Step::Precommit);
+            let vote_set = self.votes.get_vote_set(height, round, VoteType::Precommit);
             if let Some(vote_set) = vote_set {
                 for vote in lock_votes {
                     if let Some(signed_vote) = vote_set.vote_pair.get(&vote) {
@@ -634,7 +633,7 @@ impl Bft {
         proto_proposal.set_round(round as u64);
         if let Some(lock_round) = proposal.lock_round {
             proto_proposal.set_lock_round(lock_round as u64);
-            let vote_set = self.votes.get_vote_set(height, lock_round, Step::Prevote);
+            let vote_set = self.votes.get_vote_set(height, lock_round, VoteType::Prevote);
             let vote_set = safe_unwrap_option(vote_set, BftError::GetNoneVoteSet)?;
             let mut votes = Vec::new();
             let lock_votes = proposal.clone().lock_votes;
@@ -953,7 +952,7 @@ impl Bft {
         let signature = vote.get_signature();
         check_signature_len(signature)?;
         let message = safe_unwrap_result(
-            serialize(&(height as u64, round as u64, Step::Prevote, sender, proposal_hash), Infinite),
+            serialize(&(height as u64, round as u64, VoteType::Prevote, sender, proposal_hash), Infinite),
             BftError::SerializeFailed)?;
         let hash = message.crypt_hash();
         let signature = Signature::from(signature);
@@ -968,7 +967,7 @@ impl Bft {
 
         let bft_vote = extract_bft_vote(&raw_bytes)?;
         let signed_vote = extract_signed_vote(&raw_bytes)?;
-        self.votes.add(height, round, Step::Prevote, &bft_vote, &signed_vote);
+        self.votes.add(height, round, VoteType::Prevote, &bft_vote, &signed_vote);
 
         Ok(sender)
     }
@@ -1050,7 +1049,7 @@ pub fn check_proof(proof: &BftProof, h: usize, authorities: &[Address]) -> bool 
                 &(
                     h,
                     proof.round,
-                    Step::Precommit,
+                    VoteType::Precommit,
                     sender,
                     Some(proof.proposal.clone()),
                 ),

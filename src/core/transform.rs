@@ -15,8 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use bft_rs::algorithm::Step;
-use bft_rs::{Feed, Proposal as BftProposal, Status as BftStatus, Vote as BftVote};
+use bft_rs::{Feed, Proposal as BftProposal, Status as BftStatus, Vote as BftVote, VoteType};
 use bincode::deserialize;
 use core::cita_bft::{BftResult, safe_unwrap_result};
 use core::collector::SignedVote;
@@ -51,7 +50,7 @@ pub fn extract_bft_proposal(signed_proposal: &SignedProposal) -> BftResult<BftPr
         for vote in proto_proposal.get_lock_votes() {
             votes.push(
                 BftVote{
-                    vote_type: Step::Prevote,
+                    vote_type: VoteType::Prevote,
                     height,
                     round,
                     proposal: vote.get_proposal().clone().to_vec(),
@@ -82,7 +81,7 @@ pub fn extract_signed_vote(raw_bytes: &RawBytes) -> BftResult<SignedVote> {
     let (message, signature): (Vec<u8>, &[u8]) = decoded;
     let signature = Signature::from(signature);
     let decoded = safe_unwrap_result(deserialize(&message[..]), BftError::DeserializeFailed)?;
-    let (_, _, _, _, proposal):(usize, usize, Step, Address, Option<H256>) = decoded;
+    let (_, _, _, _, proposal):(usize, usize, VoteType, Address, Option<H256>) = decoded;
     Ok(SignedVote{
         proposal,
         signature,
@@ -93,7 +92,7 @@ pub fn extract_bft_vote(raw_bytes: &RawBytes) -> BftResult<BftVote> {
     let decoded = safe_unwrap_result(deserialize(raw_bytes), BftError::DeserializeFailed)?;
     let (message, _): (Vec<u8>, &[u8]) = decoded;
     let decoded = safe_unwrap_result(deserialize(&message[..]), BftError::DeserializeFailed)?;
-    let (height, round, step, sender, proposal):(usize, usize, Step, Address, Option<H256>) = decoded;
+    let (height, round, vote_type, sender, proposal):(usize, usize, VoteType, Address, Option<H256>) = decoded;
     let bft_proposal;
     if let Some(proposal) = proposal {
         bft_proposal = proposal.0.to_vec();
@@ -101,7 +100,7 @@ pub fn extract_bft_vote(raw_bytes: &RawBytes) -> BftResult<BftVote> {
         bft_proposal = Vec::new();
     }
     Ok(BftVote{
-        vote_type: step,
+        vote_type,
         height,
         round,
         proposal: bft_proposal,

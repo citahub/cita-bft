@@ -15,8 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use bft_rs::algorithm::Step;
-use bft_rs::Vote as BftVote;
+use bft_rs::{Vote, VoteType};
 use crypto::Signature;
 use libproto::consensus::SignedProposal;
 use lru_cache::LruCache;
@@ -41,27 +40,27 @@ impl VoteCollector {
         &mut self,
         height: usize,
         round: usize,
-        step: Step,
-        bft_vote: &BftVote,
+        vote_type: VoteType,
+        bft_vote: &Vote,
         signed_vote: &SignedVote,
     ) -> bool {
         if self.votes.contains_key(&height) {
             self.votes
                 .get_mut(&height)
                 .unwrap()
-                .add(round, step, bft_vote, signed_vote)
+                .add(round, vote_type, bft_vote, signed_vote)
         } else {
             let mut round_votes = RoundCollector::new();
-            round_votes.add(round, step, bft_vote, signed_vote);
+            round_votes.add(round, vote_type, bft_vote, signed_vote);
             self.votes.insert(height, round_votes);
             true
         }
     }
 
-    pub fn get_vote_set(&mut self, height: usize, round: usize, step: Step) -> Option<VoteSet> {
+    pub fn get_vote_set(&mut self, height: usize, round: usize, vote_type: VoteType) -> Option<VoteSet> {
         self.votes
             .get_mut(&height)
-            .and_then(|rc| rc.get_vote_set(round, step))
+            .and_then(|rc| rc.get_vote_set(round, vote_type))
     }
 }
 
@@ -78,31 +77,31 @@ impl RoundCollector {
         }
     }
 
-    pub fn add(&mut self, round: usize, step: Step, bft_vote: &BftVote, signed_vote: &SignedVote) -> bool {
+    pub fn add(&mut self, round: usize, vote_type: VoteType, bft_vote: &Vote, signed_vote: &SignedVote) -> bool {
         if self.round_votes.contains_key(&round) {
             self.round_votes
                 .get_mut(&round)
                 .unwrap()
-                .add(step, bft_vote, &signed_vote)
+                .add(vote_type, bft_vote, &signed_vote)
         } else {
             let mut step_votes = StepCollector::new();
-            step_votes.add(step, bft_vote, &signed_vote);
+            step_votes.add(vote_type, bft_vote, &signed_vote);
             self.round_votes.insert(round, step_votes);
             true
         }
     }
 
-    pub fn get_vote_set(&mut self, round: usize, step: Step) -> Option<VoteSet> {
+    pub fn get_vote_set(&mut self, round: usize, vote_type: VoteType) -> Option<VoteSet> {
         self.round_votes
             .get_mut(&round)
-            .and_then(|sc| sc.get_vote_set(step))
+            .and_then(|sc| sc.get_vote_set(vote_type))
     }
 }
 
 //step -> voteset
 #[derive(Debug, Clone)]
 pub struct StepCollector {
-    pub step_votes: HashMap<Step, VoteSet>,
+    pub step_votes: HashMap<VoteType, VoteSet>,
 }
 
 impl StepCollector {
@@ -112,21 +111,21 @@ impl StepCollector {
         }
     }
 
-    pub fn add(&mut self, step: Step, bft_vote: &BftVote, signed_vote: &SignedVote) -> bool {
+    pub fn add(&mut self, vote_type: VoteType, bft_vote: &Vote, signed_vote: &SignedVote) -> bool {
         self.step_votes
-            .entry(step)
+            .entry(vote_type)
             .or_insert_with(VoteSet::new)
             .add(bft_vote, signed_vote)
     }
 
-    pub fn get_vote_set(&self, step: Step) -> Option<VoteSet> {
-        self.step_votes.get(&step).cloned()
+    pub fn get_vote_set(&self, vote_type: VoteType) -> Option<VoteSet> {
+        self.step_votes.get(&vote_type).cloned()
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct VoteSet {
-    pub vote_pair: HashMap<BftVote, SignedVote>,
+    pub vote_pair: HashMap<Vote, SignedVote>,
 }
 
 impl VoteSet {
@@ -137,7 +136,7 @@ impl VoteSet {
     }
 
     //just add ,not check
-    pub fn add(&mut self, bft_vote: &BftVote, signed_vote: &SignedVote) -> bool {
+    pub fn add(&mut self, bft_vote: &Vote, signed_vote: &SignedVote) -> bool {
         let mut added = false;
         self.vote_pair.entry(bft_vote.clone()).or_insert_with(|| {
             added = true;
