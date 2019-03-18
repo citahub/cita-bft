@@ -34,16 +34,18 @@ impl Wal {
     pub fn new(dir: &str) -> Result<Wal, io::Error> {
         let fss = read_dir(&dir);
         if fss.is_err() {
-            DirBuilder::new().recursive(true).create(dir).unwrap();
+            DirBuilder::new().recursive(true).create(dir).expect("Create wal directory failed!");
         }
 
         let file_path = dir.to_string() + "/" + "index";
+        let expect_str = format!("Seek wal file {:?} failed!", &file_path);
         let mut ifs = OpenOptions::new()
             .read(true)
             .create(true)
             .write(true)
             .open(file_path)?;
-        ifs.seek(io::SeekFrom::Start(0)).unwrap();
+
+        ifs.seek(io::SeekFrom::Start(0)).expect(&expect_str);
 
         let mut string_buf: String = String::new();
         let res_fsize = ifs.read_to_string(&mut string_buf)?;
@@ -120,7 +122,7 @@ impl Wal {
     }
 
     pub fn save(&mut self, height: usize, mtype: u8, msg: &[u8]) -> io::Result<usize> {
-        info!("Wal save mtype: {}, height: {}", mtype, height);
+        trace!("Wal save mtype: {}, height: {}", mtype, height);
         if !self.height_fs.contains_key(&height) {
             // 2 more higher than current height, do not process it
             if height > self.current_height + 1 {
@@ -150,7 +152,7 @@ impl Wal {
             hlen = fs.write(msg)?;
             fs.flush()?;
         } else {
-            warn!("cita-bft wal save error in height {} ", height);
+            warn!("Can't find wal log in height {} ", height);
         }
         Ok(hlen)
     }
@@ -167,12 +169,14 @@ impl Wal {
             if *height < self.current_height {
                 continue;
             }
-            fs.seek(io::SeekFrom::Start(0)).unwrap();
+            let expect_str = format!("Seek wal file {:?} of height {} failed!", fs, *height);
+            fs.seek(io::SeekFrom::Start(0)).expect(&expect_str);
             let res_fsize = fs.read_to_end(&mut vec_buf);
             if res_fsize.is_err() {
                 return vec_out;
             }
-            let fsize = res_fsize.unwrap();
+            let expect_str = format!("Get size of buf of wal file {:?} of height {} failed!", fs, *height);
+            let fsize = res_fsize.expect(&expect_str);
             if fsize <= 5 {
                 return vec_out;
             }

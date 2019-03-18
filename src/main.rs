@@ -116,7 +116,7 @@ fn main() {
         .and_then(|mut f| f.read_to_string(&mut buffer))
         .unwrap_or_else(|err| panic!("Error while loading PrivateKey: [{}]", err));
 
-    let signer = PrivKey::from_str(clean_0x(&buffer)).unwrap();
+    let signer = PrivKey::from_str(clean_0x(&buffer)).expect("Build signer failed!");
     let bft_signer = signer.clone();
 
     let signer = Signer::from(signer);
@@ -150,8 +150,13 @@ fn main() {
     let rab_sender = sender.clone();
 
     thread::spawn(move || loop {
-        let (key, body) = cita4rab.recv().unwrap();
-        rab_sender.send(MixMsg::RabMsg((key, body))).unwrap();
+        if let Ok((key, body)) = cita4rab.recv(){
+            if let Err(_) = rab_sender.send(MixMsg::RabMsg((key, body))){
+                warn!("Receive message from rabbitMq failed!");
+            }
+        } else {
+            warn!("Send message to cita_bft failed!");
+        }
     });
 
 
@@ -163,9 +168,13 @@ fn main() {
     };
 
     thread::spawn(move || loop {
-        let msg = cita4bft.recv().unwrap();
-        let sender = sender.clone();
-        sender.send(MixMsg::BftMsg(msg)).unwrap();
+        if let Ok(msg) = cita4bft.recv(){
+            if let Err(_) = sender.send(MixMsg::BftMsg(msg)){
+                warn!("Receive message from bft_rs failed!");
+            }
+        } else {
+            warn!("Send message to cita_bft failed!");
+        }
     });
 
     let main_thread = thread::spawn(move || {

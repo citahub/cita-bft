@@ -118,7 +118,7 @@ impl Bft {
             votes: VoteCollector::new(),
             proposals: ProposalCollector::new(),
             verified_proposals: Vec::new(),
-            wal_log: Wal::new(&*wal_path).unwrap(),
+            wal_log: Wal::new(&*wal_path).expect("Create wal_log failed!"),
             auth_manage: AuthorityManage::new(),
             consensus_power: false,
             feed_block: None,
@@ -146,7 +146,8 @@ impl Bft {
             MixMsg::RabMsg(msg) => {
                 let (key, body) = msg;
                 let msg_type = RoutingKey::from(&key);
-                let mut msg = Message::try_from(body).unwrap();
+                let msg = Message::try_from(body);
+                let mut msg = safe_unwrap_result(msg, BftError::TryFromMessageFailed)?;
                 let from_broadcast = msg_type.is_sub_module(SubModules::Net);
                 if from_broadcast && self.consensus_power {
                     match msg_type {
@@ -154,14 +155,16 @@ impl Bft {
                             info!("Receive signed_proposal message!");
                             let proposal = self.handle_signed_proposal(msg, true)?;
                             info!("Send bft_proposal {:?} to bft-rs!", proposal);
-                            self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
+                            let send_result = self.cita2bft.send(BftMsg::Proposal(proposal));
+                            safe_unwrap_result(send_result, BftError::SendFailed)?;
                         }
 
                         routing_key!(Net >> RawBytes) => {
                             info!("Receive raw_bytes message!");
                             let vote = self.handle_raw_bytes(msg, true)?;
                             info!("Send bft_vote {:?} to bft-rs!", vote);
-                            self.cita2bft.send(BftMsg::Vote(vote)).unwrap();
+                            let send_result = self.cita2bft.send(BftMsg::Vote(vote));
+                            safe_unwrap_result(send_result, BftError::SendFailed)?;
                         }
 
                         _ => {
@@ -174,7 +177,8 @@ impl Bft {
                             info!("Receive rich_status message!");
                             let status = self.handle_rich_status(msg, true)?;
                             info!("Send bft_status {:?} to bft-rs!", status);
-                            self.cita2bft.send(BftMsg::Status(status)).unwrap();
+                            let send_result = self.cita2bft.send(BftMsg::Status(status));
+                            safe_unwrap_result(send_result, BftError::SendFailed)?;
                             let height = self.height;//ProposalRoundCollector
                             let mut proposals = self.proposals.proposals.clone();
                             let mut round_proposals = proposals.get_mut(&height);
@@ -183,7 +187,8 @@ impl Bft {
                                     info!("Handle signed_proposal message in cache!");
                                     let proposal = self.handle_proposal_in_cache(signed_proposal)?;
                                     info!("Send cached bft_proposal {:?} to bft-rs!", proposal);
-                                    self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
+                                    let send_result = self.cita2bft.send(BftMsg::Proposal(proposal));
+                                    safe_unwrap_result(send_result, BftError::SendFailed)?;
                                 }
                             };
 
@@ -198,7 +203,8 @@ impl Bft {
                                             self.check_raw_bytes_sender(height, &sender)?;
                                             let bft_vote: BftVote = bft_vote.clone();
                                             info!("Send cached bft_vote {:?} to bft-rs!", bft_vote);
-                                            self.cita2bft.send(BftMsg::Vote(bft_vote)).unwrap();
+                                            let send_result = self.cita2bft.send(BftMsg::Vote(bft_vote));
+                                            safe_unwrap_result(send_result, BftError::SendFailed)?;
                                         }
                                     }
 
@@ -210,14 +216,16 @@ impl Bft {
                             info!("Receive block_txs message!");
                             let feed = self.handle_block_txs(msg, true)?;
                             info!("Send bft_feed {:?} to bft-rs!", feed);
-                            self.cita2bft.send(BftMsg::Feed(feed)).unwrap();
+                            let send_result = self.cita2bft.send(BftMsg::Feed(feed));
+                            safe_unwrap_result(send_result, BftError::SendFailed)?;
                         }
 
                         routing_key!(Auth >> VerifyBlockResp) => {
                             info!("Receive verify_block_resp message!");
                             let proposal = self.handle_verify_block_resp(msg, true)?;
                             info!("Send verified bft_proposal {:?} to bft-rs!", proposal);
-                            self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
+                            let send_result = self.cita2bft.send(BftMsg::Proposal(proposal));
+                            safe_unwrap_result(send_result, BftError::SendFailed)?;
                         }
 
                         _ => {
@@ -233,10 +241,9 @@ impl Bft {
                         let signed_proposal = self.handle_proposal(proposal, true)?;
                         info!("Send signed_proposal {:?} to rabbit_mq!", signed_proposal);
                         let msg: Message = signed_proposal.into();
-                        self.cita2rab.send((
-                            routing_key!(Consensus >> SignedProposal).into(),
-                            msg.try_into().unwrap(),
-                        )).unwrap();
+                        let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
+                        let send_result = self.cita2rab.send((routing_key!(Consensus >> SignedProposal).into(), msg));
+                        safe_unwrap_result(send_result, BftError::SendFailed)?;
                     }
 
                     BftMsg::Vote(vote) => {
@@ -244,10 +251,9 @@ impl Bft {
                         let raw_bytes = self.handle_vote(vote, true)?;
                         info!("Send raw_bytes {:?} to rabbit_mq!", raw_bytes);
                         let msg: Message = raw_bytes.into();
-                        self.cita2rab.send((
-                            routing_key!(Consensus >> RawBytes).into(),
-                            msg.try_into().unwrap(),
-                        )).unwrap();
+                        let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
+                        let send_result = self.cita2rab.send((routing_key!(Consensus >> RawBytes).into(), msg));
+                        safe_unwrap_result(send_result, BftError::SendFailed)?;
                     }
 
                     BftMsg::Commit(commit) => {
@@ -255,13 +261,14 @@ impl Bft {
                         let block_with_proof = self.handle_commit(commit, true)?;
                         info!("Send block_with_proof {:?} to rabbit_mq!", block_with_proof);
                         let msg: Message = block_with_proof.into();
-                        self.cita2rab.send((
-                            routing_key!(Consensus >> BlockWithProof).into(),
-                            msg.try_into().unwrap(),
-                        )).unwrap();
+                        let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
+                        let send_result = self.cita2rab.send((routing_key!(Consensus >> BlockWithProof).into(), msg));
+                        safe_unwrap_result(send_result, BftError::SendFailed)?;
                     }
 
-                    _ => {}
+                    _ => {
+                        warn!("Receive a message with wrong type!");
+                    }
                 }
             }
         }
@@ -269,7 +276,8 @@ impl Bft {
     }
 
     fn handle_signed_proposal(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftProposal> {
-        let signed_proposal = msg.take_signed_proposal().unwrap();
+        let signed_proposal = msg.take_signed_proposal();
+        let signed_proposal = safe_unwrap_option(signed_proposal, BftError::TakeNoneSignedProposal)?;
         let signature = signed_proposal.get_signature();
         check_signature_len(signature)?;
 
@@ -282,7 +290,8 @@ impl Bft {
         }
 
         let signature = Signature::from(signature);
-        let message: Vec<u8> = proto_proposal.try_into().unwrap();
+        let message: Vec<u8> = safe_unwrap_result(proto_proposal.try_into(), BftError::ProtoProposalTryIntoFailed)?;
+
         let hash = message.crypt_hash();
         let address = check_signature(&signature, &hash)?;
 
@@ -292,8 +301,10 @@ impl Bft {
         if height >= self.height {
             if height - self.height < CACHE_NUMBER {
                 if need_wal {
-                    let msg: Vec<u8> = msg.try_into().unwrap();
-                    self.wal_log.save(height, LOG_TYPE_SIGNED_PROPOSAL, &msg).unwrap();
+                    let msg: Vec<u8> = safe_unwrap_result(msg.try_into(), BftError::MessageTryIntoFailed)?;
+                    if let Err(_) = self.wal_log.save(height, LOG_TYPE_SIGNED_PROPOSAL, &msg){
+                        return Err(BftError::SaveWalLogFailed);
+                    }
                 }
                 self.proposals.add(height, round, &signed_proposal);
             }
@@ -302,7 +313,7 @@ impl Bft {
                 return Err(BftError::HigherProposal);
             }
         }
-        let bft_proposal = extract_bft_proposal(&signed_proposal);
+        let bft_proposal = extract_bft_proposal(&signed_proposal)?;
 
         self.check_proposer(height, round, &address)?;
         self.check_lock_votes(&proto_proposal, &hash)?;
@@ -333,14 +344,15 @@ impl Bft {
         let round = proto_proposal.get_round() as usize;
 
         let signature = Signature::from(signature);
-        let message: Vec<u8> = proto_proposal.try_into().unwrap();
+        let message: Vec<u8> = safe_unwrap_result(proto_proposal.try_into(), BftError::ProtoProposalTryIntoFailed)?;
+
         let hash = message.crypt_hash();
         let address = check_signature(&signature, &hash)?;
 
         self.check_proposer(height, round, &address)?;
         self.check_lock_votes(&proto_proposal, &hash)?;
 
-        let bft_proposal = extract_bft_proposal(&signed_proposal);
+        let bft_proposal = extract_bft_proposal(&signed_proposal)?;
         let block = proto_proposal.get_block();
         let block_hash = block.crypt_hash();
         if self.verified_proposals.contains(&block_hash) {
@@ -358,7 +370,8 @@ impl Bft {
     }
 
     fn handle_verify_block_resp(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftProposal> {
-        let resp = msg.take_verify_block_resp().unwrap();
+        let resp = msg.take_verify_block_resp();
+        let resp = safe_unwrap_option(resp, BftError::TakeNoneVerifyBlockResp)?;
         if resp.get_ret() != auth::Ret::OK {
             warn!("The block failed to pass the verification of Auth!");
             return Err(BftError::AuthVerifyFailed);
@@ -372,19 +385,23 @@ impl Bft {
             return Err(BftError::ObsoleteVerifyBlockResp);
         }
         if need_wal {
-            let msg: Vec<u8> = msg.try_into().unwrap();
-            self.wal_log.save(height, LOG_TYPE_VERIFY_BLOCK_PESP, &msg).unwrap();
+            let msg: Vec<u8> = safe_unwrap_result(msg.try_into(), BftError::MessageTryIntoFailed)?;
+            if let Err(_) = self.wal_log.save(height, LOG_TYPE_VERIFY_BLOCK_PESP, &msg){
+                return Err(BftError::SaveWalLogFailed);
+            }
         }
-        let signed_proposal = self.proposals.get_proposal(height, round).unwrap();
-        let bft_proposal = extract_bft_proposal(&signed_proposal);
+        let signed_proposal = self.proposals.get_proposal(height, round);
+        let signed_proposal = safe_unwrap_option(signed_proposal, BftError::GetNoneProposal)?;
+        let bft_proposal = extract_bft_proposal(&signed_proposal)?;
         let hash = H256::from_slice(&(bft_proposal.content));
         self.verified_proposals.push(hash);
         Ok(bft_proposal)
     }
 
     fn handle_raw_bytes(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftVote> {
-        let raw_bytes = msg.take_raw_bytes().unwrap();
-        let decoded = deserialize(&raw_bytes).unwrap();
+        let raw_bytes = msg.take_raw_bytes();
+        let raw_bytes = safe_unwrap_option(raw_bytes, BftError::TakeNoneRawBytes)?;
+        let decoded = safe_unwrap_result(deserialize(&raw_bytes), BftError::DeserializeFailed)?;
         let (message, signature): (Vec<u8>, &[u8]) = decoded;
         check_signature_len(&signature)?;
 
@@ -392,7 +409,7 @@ impl Bft {
         let hash = message.crypt_hash();
         let address = check_signature(&signature, &hash)?;
 
-        let decoded = deserialize(&message[..]).unwrap();
+        let decoded = safe_unwrap_result(deserialize(&message[..]), BftError::DeserializeFailed)?;
         let (height, round, step, sender, _):(usize, usize, Step, Address, Option<H256>) = decoded;
         if height < self.height - 1 {
             warn!("The height of raw_bytes is {} which is obsolete compared to self.height {}!", height, self.height);
@@ -403,14 +420,16 @@ impl Bft {
             return Err(BftError::MismatchingVoter);
         }
 
-        let bft_vote = extract_bft_vote(&raw_bytes);
-        let signed_vote = extract_signed_vote(&raw_bytes);
+        let bft_vote = extract_bft_vote(&raw_bytes)?;
+        let signed_vote = extract_signed_vote(&raw_bytes)?;
 
         if height >= self.height {
             if height - self.height < CACHE_NUMBER {
                 if need_wal {
-                    let msg: Vec<u8> = msg.try_into().unwrap();
-                    self.wal_log.save(height, LOG_TYPE_RAW_BYTES, &msg).unwrap();
+                    let msg: Vec<u8> = safe_unwrap_result(msg.try_into(), BftError::MessageTryIntoFailed)?;
+                    if let Err(_) = self.wal_log.save(height, LOG_TYPE_RAW_BYTES, &msg){
+                        return Err(BftError::SaveWalLogFailed);
+                    }
                 }
                 self.votes.add(height, round, step, &bft_vote, &signed_vote);
             }
@@ -425,15 +444,18 @@ impl Bft {
     }
 
     fn handle_block_txs(&mut self, mut msg: Message, need_wal: bool) -> BftResult<Feed> {
-        let block_txs = msg.take_block_txs().unwrap();
+        let block_txs = msg.take_block_txs();
+        let block_txs = safe_unwrap_option(block_txs, BftError::TakeNoneBlockTxs)?;
         let height = block_txs.get_height() as usize;
         if height != self.height - 1 {
             warn!("the height of block_txs is {}, while self.height is {}", height, self.height);
             return Err(BftError::MismatchingBlockTxs);
         }
         if need_wal {
-            let msg: Vec<u8> = msg.try_into().unwrap();
-            self.wal_log.save(self.height, LOG_TYPE_BLOCK_TXS, &msg).unwrap();
+            let msg: Vec<u8> = safe_unwrap_result(msg.try_into(), BftError::MessageTryIntoFailed)?;
+            if let Err(_) = self.wal_log.save(self.height, LOG_TYPE_BLOCK_TXS, &msg){
+                return Err(BftError::SaveWalLogFailed);
+            }
         }
         let block = self.build_feed_block(block_txs)?;
         self.feed_block = Some(block.clone());
@@ -442,15 +464,18 @@ impl Bft {
     }
 
     fn handle_rich_status(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftStatus> {
-        let rich_status = msg.take_rich_status().unwrap();
+        let rich_status = msg.take_rich_status();
+        let rich_status = safe_unwrap_option(rich_status, BftError::TakeNoneRichStatus)?;
         let height = rich_status.height as usize;
         if height < self.height {
             warn!("The height of rich_status is {} which is obsolete compared to self.height {}!", height, self.height);
             return Err(BftError::ObsoleteRichStatus);
         }
         if need_wal {
-            let msg: Vec<u8> = msg.try_into().unwrap();
-            self.wal_log.save(height + 1, LOG_TYPE_RICH_STATUS, &msg).unwrap();
+            let msg: Vec<u8> = safe_unwrap_result(msg.try_into(), BftError::MessageTryIntoFailed)?;
+            if let Err(_) = self.wal_log.save(height + 1, LOG_TYPE_RICH_STATUS, &msg){
+                return Err(BftError::SaveWalLogFailed);
+            }
         }
         let pre_hash = H256::from_slice(&rich_status.hash);
         self.pre_hash = Some(pre_hash);
@@ -463,11 +488,13 @@ impl Bft {
         if authorities.contains(&self.signer.address) && !self.consensus_power{
             info!("Get consensus power in height {} and wake up the bft-rs process!", height);
             self.consensus_power = true;
-            self.cita2bft.send(BftMsg::Continue).unwrap();
+            let send_result = self.cita2bft.send(BftMsg::Continue);
+            safe_unwrap_result(send_result, BftError::SendFailed)?;
         } else if !authorities.contains(&self.signer.address) && self.consensus_power{
             info!("Lost consensus power in height {} and pause the bft-rs process!", height);
             self.consensus_power = false;
-            self.cita2bft.send(BftMsg::Pause).unwrap();
+            let send_result = self.cita2bft.send(BftMsg::Pause);
+            safe_unwrap_result(send_result, BftError::SendFailed)?;
         }
 
         self.set_new_height(height)?;
@@ -483,8 +510,10 @@ impl Bft {
             return Err(BftError::ObsoleteBftProposal);
         }
         if need_wal {
-            let msg: Vec<u8> = serialize(&(proposal), Infinite).unwrap();
-            self.wal_log.save(height, LOG_TYPE_PROPOSAL, &msg).unwrap();
+            let msg: Vec<u8> = safe_unwrap_result(serialize(&(proposal), Infinite), BftError::SerializeFailed)?;
+            if let Err(_) = self.wal_log.save(height, LOG_TYPE_PROPOSAL, &msg){
+                return Err(BftError::SaveWalLogFailed);
+            }
         }
         let signed_proposal = self.build_signed_proposal(proposal)?;
         self.proposals.add(height, round, &signed_proposal);
@@ -498,11 +527,13 @@ impl Bft {
             return Err(BftError::ObsoleteBftVote);
         }
         if need_wal {
-            let msg: Vec<u8> = serialize(&(vote), Infinite).unwrap();
-            self.wal_log.save(height, LOG_TYPE_VOTE, &msg).unwrap();
+            let msg: Vec<u8> = safe_unwrap_result(serialize(&(vote), Infinite), BftError::SerializeFailed)?;
+            if let Err(_) = self.wal_log.save(height, LOG_TYPE_VOTE, &msg){
+                return Err(BftError::SaveWalLogFailed);
+            }
         }
         let raw_bytes = self.build_raw_bytes(vote.clone())?;
-        let signed_vote = extract_signed_vote(&raw_bytes);
+        let signed_vote = extract_signed_vote(&raw_bytes)?;
         self.votes.add(height, vote.round, vote.vote_type, &vote, &signed_vote);
         Ok(raw_bytes)
     }
@@ -514,8 +545,10 @@ impl Bft {
             return Err(BftError::ObsoleteCommit);
         }
         if need_wal {
-            let msg: Vec<u8> = serialize(&(commit), Infinite).unwrap();
-            self.wal_log.save(height, LOG_TYPE_COMMIT, &msg).unwrap();
+            let msg: Vec<u8> = safe_unwrap_result(serialize(&(commit), Infinite), BftError::SerializeFailed)?;
+            if let Err(_) = self.wal_log.save(height, LOG_TYPE_COMMIT, &msg){
+                return Err(BftError::SaveWalLogFailed);
+            }
         }
         let block_with_proof = self.build_block_with_proof(commit)?;
         Ok(block_with_proof)
@@ -529,17 +562,21 @@ impl Bft {
         } else {
             None
         };
-        let msg = serialize(&(vote.height, vote.round, vote.vote_type, sender, proposal), Infinite).unwrap();
-        let signature = Signature::sign(author.keypair.privkey(), &msg.crypt_hash()).unwrap();
+        let msg: Vec<u8> = safe_unwrap_result(
+            serialize(&(vote.height, vote.round, vote.vote_type, sender, proposal), Infinite),
+            BftError::SerializeFailed)?;
+        let signature = Signature::sign(author.keypair.privkey(), &msg.crypt_hash());
+        let signature = safe_unwrap_result(signature, BftError::MessageSignFailed)?;
         let sig = signature.clone();
-        let raw_bytes = serialize(&(msg, sig), Infinite).unwrap();
+        let raw_bytes = safe_unwrap_result(serialize(&(msg, sig), Infinite), BftError::SerializeFailed)?;
         Ok(raw_bytes)
     }
 
     fn build_block_with_proof(&mut self, commit: Commit) -> BftResult<BlockWithProof>{
         let height = commit.height;
         let round = commit.round;
-        let signed_proposal = self.proposals.get_proposal(height, round).unwrap();
+        let signed_proposal = self.proposals.get_proposal(height, round);
+        let signed_proposal = safe_unwrap_option(signed_proposal, BftError::GetNoneProposal)?;
         let block = signed_proposal.get_proposal().get_block();
         let hash = block.crypt_hash();
         let lock_votes = commit.lock_votes;
@@ -585,10 +622,11 @@ impl Bft {
         let round = proposal.round;
         let block;
         if let Some(lock_round) = proposal.lock_round {
-            let signed_proposal = self.proposals.get_proposal(height, lock_round).unwrap();
+            let signed_proposal = self.proposals.get_proposal(height, lock_round);
+            let signed_proposal = safe_unwrap_option(signed_proposal, BftError::GetNoneProposal)?;
             block = signed_proposal.get_proposal().get_block().clone();
         } else {
-            block = self.feed_block.clone().unwrap();
+            block = safe_unwrap_option(self.feed_block.clone(), BftError::FeedBlockIsNone)?;
         };
         let mut proto_proposal = ProtoProposal::new();
         proto_proposal.set_block(block);
@@ -596,11 +634,15 @@ impl Bft {
         proto_proposal.set_round(round as u64);
         if let Some(lock_round) = proposal.lock_round {
             proto_proposal.set_lock_round(lock_round as u64);
-            let vote_set = self.votes.get_vote_set(height, lock_round, Step::Prevote).unwrap();
+            let vote_set = self.votes.get_vote_set(height, lock_round, Step::Prevote);
+            let vote_set = safe_unwrap_option(vote_set, BftError::GetNoneVoteSet)?;
             let mut votes = Vec::new();
-            for vote in proposal.clone().lock_votes.unwrap() {
+            let lock_votes = proposal.clone().lock_votes;
+            let lock_votes = safe_unwrap_option(lock_votes, BftError::GetNoneLockVotes)?;
+            for vote in lock_votes {
                 let mut proto_vote = ProtoVote::new();
-                let signed_vote = vote_set.vote_pair.get(&vote).unwrap();
+                let signed_vote = vote_set.vote_pair.get(&vote);
+                let signed_vote = safe_unwrap_option(signed_vote, BftError::GetNoneSignedVote)?;
                 proto_vote.set_proposal(vote.proposal.to_vec());
                 proto_vote.set_sender(vote.voter.to_vec());
                 proto_vote.set_signature(signed_vote.signature.to_vec());
@@ -608,9 +650,11 @@ impl Bft {
             }
             proto_proposal.set_lock_votes(votes.into());
         }
-        let message: Vec<u8> = (&proto_proposal).try_into().unwrap();
+        let message: Vec<u8> = safe_unwrap_result((&proto_proposal).try_into(), BftError::ProtoProposalTryIntoFailed)?;
+
         let author = &self.signer;
-        let signature = Signature::sign(author.keypair.privkey(), &message.crypt_hash()).unwrap();
+        let signature = Signature::sign(author.keypair.privkey(), &message.crypt_hash());
+        let signature = safe_unwrap_result(signature, BftError::MessageSignFailed)?;
 
         let mut signed_proposal = SignedProposal::new();
         signed_proposal.set_proposal(proto_proposal);
@@ -640,7 +684,7 @@ impl Bft {
             return Err(BftError::SelfPreHashNotReady);
         }
         let proof = self.proof.clone();
-        if (proof.is_default() || proof.height != self.height - 1) && self.height > 1{
+        if (proof.is_default() || proof.height != self.height - 1) && self.height > 1 {
             warn!("Self.proof is not ready!");
             return Err(BftError::SelfProofNotReady);
         }
@@ -663,12 +707,9 @@ impl Bft {
         let reqid = gen_reqid_from_idx(height as u64, round as u64);
         let verify_req = block.block_verify_req(reqid);
         let msg: Message = verify_req.into();
-        self.cita2rab
-            .send((
-                routing_key!(Consensus >> VerifyBlockReq).into(),
-                (&msg).try_into().unwrap(),
-            ))
-            .unwrap();
+        let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
+        let send_result = self.cita2rab.send((routing_key!(Consensus >> VerifyBlockReq).into(), msg));
+        safe_unwrap_result(send_result, BftError::SendFailed)?;
         Ok(())
     }
 
@@ -680,78 +721,78 @@ impl Bft {
             match msg_type {
                 LOG_TYPE_SIGNED_PROPOSAL => {
                     info!("Load signed_proposal!");
-                    let msg = Message::try_from(msg).unwrap();
+                    let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(proposal) = self.handle_signed_proposal(msg, false){
                         info!("Send bft_proposal {:?} to bft-rs!", proposal);
-                        self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
+                        self.cita2bft.send(BftMsg::Proposal(proposal)).expect("Send bft_proposal failed!");
                     };
                 }
                 LOG_TYPE_RAW_BYTES => {
                     info!("Load raw_bytes!");
-                    let msg = Message::try_from(msg).unwrap();
+                    let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(vote) = self.handle_raw_bytes(msg, false) {
                         info!("Send bft_vote {:?} to bft-rs!", vote);
-                        self.cita2bft.send(BftMsg::Vote(vote)).unwrap();
+                        self.cita2bft.send(BftMsg::Vote(vote)).expect("Send bft_vote failed!");
                     };
                 }
                 LOG_TYPE_RICH_STATUS => {
                     info!("Load rich_status!");
-                    let msg = Message::try_from(msg).unwrap();
+                    let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(status) = self.handle_rich_status(msg, false) {
                         info!("Send bft_status {:?} to bft-rs!", status);
-                        self.cita2bft.send(BftMsg::Status(status)).unwrap();
+                        self.cita2bft.send(BftMsg::Status(status)).expect("Send bft_status failed!");
                     };
                 }
                 LOG_TYPE_BLOCK_TXS => {
                     info!("Load block_txs!");
-                    let msg = Message::try_from(msg).unwrap();
+                    let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(feed) = self.handle_block_txs(msg, false) {
                         info!("Send bft_feed {:?} to bft-rs!", feed);
-                        self.cita2bft.send(BftMsg::Feed(feed)).unwrap();
+                        self.cita2bft.send(BftMsg::Feed(feed)).expect("Send bft_feed failed!");
                     };
                 }
                 LOG_TYPE_VERIFY_BLOCK_PESP => {
                     info!("Load verify_block_resp!");
-                    let msg = Message::try_from(msg).unwrap();
+                    let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(proposal) = self.handle_verify_block_resp(msg, false) {
                         info!("Send verified bft_proposal {:?} to bft-rs!", proposal);
-                        self.cita2bft.send(BftMsg::Proposal(proposal)).unwrap();
+                        self.cita2bft.send(BftMsg::Proposal(proposal)).expect("Send bft_proposal failed!");
                     };
                 }
                 LOG_TYPE_PROPOSAL => {
                     info!("Load bft_proposal!");
-                    let proposal = deserialize(&msg[..]).unwrap();
+                    let proposal = deserialize(&msg[..]).expect("Deserialize message failed!");
                     if let Ok(signed_proposal) = self.handle_proposal(proposal, false) {
                         info!("Send signed_proposal {:?} to rabbit_mq!", signed_proposal);
                         let msg: Message = signed_proposal.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> SignedProposal).into(),
-                            msg.try_into().unwrap(),
-                        )).unwrap();
+                            msg.try_into().expect("Try into message failed!"),
+                        )).expect("Send signed_proposal failed!");;
                     };
                 }
                 LOG_TYPE_VOTE => {
                     info!("Load bft_vote!");
-                    let vote = deserialize(&msg[..]).unwrap();
+                    let vote = deserialize(&msg[..]).expect("Deserialize message failed!");
                     if let Ok(raw_bytes) = self.handle_vote(vote, false) {
                         info!("Send raw_bytes {:?} to rabbit_mq!", raw_bytes);
                         let msg: Message = raw_bytes.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> RawBytes).into(),
-                            msg.try_into().unwrap(),
-                        )).unwrap();
+                            msg.try_into().expect("Try into message failed!"),
+                        )).expect("Send raw_bytes failed!");
                     };
                 }
                 LOG_TYPE_COMMIT => {
                     info!("Load bft_commit!");
-                    let commit = deserialize(&msg[..]).unwrap();
+                    let commit = deserialize(&msg[..]).expect("Deserialize message failed!");
                     if let Ok(block_with_proof) = self.handle_commit(commit, true) {
                         info!("Send block_with_proof {:?} to rabbit_mq!", block_with_proof);
                         let msg: Message = block_with_proof.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> BlockWithProof).into(),
-                            msg.try_into().unwrap(),
-                        )).unwrap();
+                            msg.try_into().expect("Try into message failed!"),
+                        )).expect("Send block_with_proof failed!");
                     };
                 }
                 _ => {}
@@ -859,8 +900,6 @@ impl Bft {
             return Err(BftError::ShouldNotHappen);
         }
 
-        let round = proto_proposal.get_round() as usize;
-
         let mut map = HashMap::new();
         if proto_proposal.get_islock() {
             let lock_round = proto_proposal.get_lock_round() as usize;
@@ -913,7 +952,9 @@ impl Bft {
 
         let signature = vote.get_signature();
         check_signature_len(signature)?;
-        let message = serialize(&(height as u64, round as u64, Step::Prevote, sender, proposal_hash), Infinite).unwrap();
+        let message = safe_unwrap_result(
+            serialize(&(height as u64, round as u64, Step::Prevote, sender, proposal_hash), Infinite),
+            BftError::SerializeFailed)?;
         let hash = message.crypt_hash();
         let signature = Signature::from(signature);
         let address = check_signature(&signature, &hash)?;
@@ -922,10 +963,11 @@ impl Bft {
             return Err(BftError::MismatchingVoter);
         }
 
-        let msg = serialize(&(message, signature), Infinite).unwrap();
-        let raw_bytes: RawBytes = msg.try_into().unwrap();
-        let bft_vote = extract_bft_vote(&raw_bytes);
-        let signed_vote = extract_signed_vote(&raw_bytes);
+        let msg = safe_unwrap_result(serialize(&(message, signature), Infinite), BftError::SerializeFailed)?;
+        let raw_bytes: RawBytes = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
+
+        let bft_vote = extract_bft_vote(&raw_bytes)?;
+        let signed_vote = extract_signed_vote(&raw_bytes)?;
         self.votes.add(height, round, Step::Prevote, &bft_vote, &signed_vote);
 
         Ok(sender)
@@ -992,7 +1034,7 @@ fn check_tx(tx: &Transaction, height: u64) -> BftResult<()> {
     Ok(())
 }
 
-pub fn check_proof (proof: &BftProof, h: usize, authorities: &[Address]) -> bool {
+pub fn check_proof(proof: &BftProof, h: usize, authorities: &[Address]) -> bool {
     if h == 0 {
         return true;
     }
@@ -1014,7 +1056,8 @@ pub fn check_proof (proof: &BftProof, h: usize, authorities: &[Address]) -> bool
                 ),
                 Infinite,
             )
-                .unwrap();
+                .expect("Serialize precommit vote failed!");
+
             let signature = Signature(sig.0.into());
             if let Ok(pubkey) = signature.recover(&msg.crypt_hash().into()) {
                 return pubkey_to_address(&pubkey) == sender.clone().into();
@@ -1025,7 +1068,7 @@ pub fn check_proof (proof: &BftProof, h: usize, authorities: &[Address]) -> bool
 }
 
 #[inline]
-fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T> {
+pub fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T> {
     if let Ok(value) = result {
         return Ok(value);
     }
@@ -1033,7 +1076,7 @@ fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T>
 }
 
 #[inline]
-fn safe_unwrap_option<T>(option: Option<T>, err: BftError) -> BftResult<T> {
+pub fn safe_unwrap_option<T>(option: Option<T>, err: BftError) -> BftResult<T> {
     if let Some(value) = option {
         return Ok(value);
     }

@@ -18,7 +18,9 @@
 use bft_rs::algorithm::Step;
 use bft_rs::{Feed, Proposal as BftProposal, Status as BftStatus, Vote as BftVote};
 use bincode::deserialize;
+use core::cita_bft::{BftResult, safe_unwrap_result};
 use core::collector::SignedVote;
+use core::error::BftError;
 use crypto::{pubkey_to_address, Sign, Signature};
 use libproto::blockchain::{Block, RichStatus};
 use libproto::consensus::SignedProposal;
@@ -27,7 +29,7 @@ use std::convert::TryInto;
 use types::{Address, H256};
 use util::Hashable;
 
-pub fn extract_bft_proposal(signed_proposal: &SignedProposal) -> BftProposal {
+pub fn extract_bft_proposal(signed_proposal: &SignedProposal) -> BftResult<BftProposal> {
     let signature = signed_proposal.get_signature();
     let proto_proposal = signed_proposal.get_proposal();
 
@@ -35,9 +37,11 @@ pub fn extract_bft_proposal(signed_proposal: &SignedProposal) -> BftProposal {
     let round = proto_proposal.get_round() as usize;
 
     let signature = Signature::from(signature);
-    let message: Vec<u8> = proto_proposal.try_into().unwrap();
+    let message: Vec<u8> = safe_unwrap_result(proto_proposal.try_into(), BftError::ProtoProposalTryIntoFailed)?;
+
     let hash = message.crypt_hash();
-    let pub_key = signature.recover(&hash).unwrap();
+    let pub_key = signature.recover(&hash);
+    let pub_key = safe_unwrap_result(pub_key, BftError::SignatureRecoverFailed)?;
     let address = pubkey_to_address(&pub_key);
 
     let mut lock_round = None;
@@ -63,32 +67,32 @@ pub fn extract_bft_proposal(signed_proposal: &SignedProposal) -> BftProposal {
     let block = proto_proposal.get_block();
     let block_hash = block.crypt_hash();
 
-    BftProposal{
+    Ok(BftProposal{
         height,
         round,
         content: block_hash.0.to_vec(),
         lock_round,
         lock_votes,
         proposer: address.0.to_vec(),
-    }
+    })
 }
 
-pub fn extract_signed_vote(raw_bytes: &RawBytes) -> SignedVote {
-    let decoded = deserialize(raw_bytes).unwrap();
+pub fn extract_signed_vote(raw_bytes: &RawBytes) -> BftResult<SignedVote> {
+    let decoded = safe_unwrap_result(deserialize(raw_bytes), BftError::DeserializeFailed)?;
     let (message, signature): (Vec<u8>, &[u8]) = decoded;
     let signature = Signature::from(signature);
-    let decoded = deserialize(&message[..]).unwrap();
+    let decoded = safe_unwrap_result(deserialize(&message[..]), BftError::DeserializeFailed)?;
     let (_, _, _, _, proposal):(usize, usize, Step, Address, Option<H256>) = decoded;
-    SignedVote{
+    Ok(SignedVote{
         proposal,
         signature,
-    }
+    })
 }
 
-pub fn extract_bft_vote(raw_bytes: &RawBytes) -> BftVote {
-    let decoded = deserialize(raw_bytes).unwrap();
+pub fn extract_bft_vote(raw_bytes: &RawBytes) -> BftResult<BftVote> {
+    let decoded = safe_unwrap_result(deserialize(raw_bytes), BftError::DeserializeFailed)?;
     let (message, _): (Vec<u8>, &[u8]) = decoded;
-    let decoded = deserialize(&message[..]).unwrap();
+    let decoded = safe_unwrap_result(deserialize(&message[..]), BftError::DeserializeFailed)?;
     let (height, round, step, sender, proposal):(usize, usize, Step, Address, Option<H256>) = decoded;
     let bft_proposal;
     if let Some(proposal) = proposal {
@@ -96,13 +100,13 @@ pub fn extract_bft_vote(raw_bytes: &RawBytes) -> BftVote {
     } else {
         bft_proposal = Vec::new();
     }
-    BftVote{
+    Ok(BftVote{
         vote_type: step,
         height,
         round,
         proposal: bft_proposal,
         voter: sender.0.to_vec(),
-    }
+    })
 }
 
 pub fn extract_feed(block: &Block) -> Feed {
