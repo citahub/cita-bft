@@ -41,7 +41,6 @@ use util::datapath::DataPath;
 use util::{BLOCKLIMIT, Hashable};
 
 const INIT_HEIGHT: usize = 0;
-//const TIMEOUT_OF_LOW_ROUND_VOTE: u64 = 1000;
 const LOG_TYPE_SIGNED_PROPOSAL: u8 = 1;
 const LOG_TYPE_RAW_BYTES: u8 = 2;
 const LOG_TYPE_RICH_STATUS: u8 = 3;
@@ -74,7 +73,6 @@ pub struct Bft {
     auth_manage: AuthorityManage,
     consensus_power: bool,
     feed_block: Option<Block>,
-//    vote_recv_filter: HashMap<Address, (usize, Step, Instant)>,
 }
 
 impl ::std::fmt::Debug for Bft {
@@ -124,7 +122,6 @@ impl Bft {
             auth_manage: AuthorityManage::new(),
             consensus_power: false,
             feed_block: None,
-//            vote_recv_filter: HashMap::new(),
         }
     }
 
@@ -599,7 +596,7 @@ impl Bft {
         proto_proposal.set_round(round as u64);
         if let Some(lock_round) = proposal.lock_round {
             proto_proposal.set_lock_round(lock_round as u64);
-            let vote_set = self.votes.get_vote_set(height, round, Step::Prevote).unwrap();
+            let vote_set = self.votes.get_vote_set(height, lock_round, Step::Prevote).unwrap();
             let mut votes = Vec::new();
             for vote in proposal.clone().lock_votes.unwrap() {
                 let mut proto_vote = ProtoVote::new();
@@ -657,29 +654,6 @@ impl Bft {
         block.mut_header().set_proposer(self.signer.address.to_vec());
         Ok(block)
     }
-
-//    fn check_filter(&mut self, sender: Address, round: usize, step: Step) -> BftResult<()> {
-//        let res = self.vote_recv_filter.get_mut(&sender);
-//        let now = Instant::now();
-//        let mut add_flag = false;
-//        if let Some(val) = res {
-//            let (f_round, f_step, ins) = *val;
-//            if round > f_round || (f_round == round && step > f_step) {
-//                add_flag = true;
-//            } else if f_round == round && step == f_step && now - ins > Duration::from_millis(TIMEOUT_OF_LOW_ROUND_VOTE)
-//                {
-//                    add_flag = true;
-//                }
-//        } else {
-//            add_flag = true;
-//        }
-//
-//        if add_flag {
-//            self.vote_recv_filter.insert(sender, (round, step, now));
-//            return Ok(());
-//        }
-//        Err(BftError::RawBytesReceivedFrequently)
-//    }
 
     fn send_auth_for_validation(&mut self, block: &Block, height: usize, round: usize) -> BftResult<()>  {
         if height != self.height {
@@ -889,8 +863,9 @@ impl Bft {
 
         let mut map = HashMap::new();
         if proto_proposal.get_islock() {
+            let lock_round = proto_proposal.get_lock_round() as usize;
             for vote in proto_proposal.get_lock_votes() {
-                let sender = self.check_proto_vote(height, round, proposal_hash, &vote)?;
+                let sender = self.check_proto_vote(height, lock_round, proposal_hash, &vote)?;
                 if let Some(_) = map.insert(sender, 1) {
                     return Err(BftError::RepeatLockVote);
                 }
@@ -957,10 +932,12 @@ impl Bft {
     }
 }
 
+#[inline]
 fn gen_reqid_from_idx(h: u64, r: u64) -> u64 {
     ((h & 0xffff_ffff_ffff) << 16) | r
 }
 
+#[inline]
 fn get_idx_from_reqid(reqid: u64) -> (u64, u64) {
     (reqid >> 16, reqid & 0xffff)
 }
@@ -1015,7 +992,6 @@ fn check_tx(tx: &Transaction, height: u64) -> BftResult<()> {
     Ok(())
 }
 
-// Check proof commits
 pub fn check_proof (proof: &BftProof, h: usize, authorities: &[Address]) -> bool {
     if h == 0 {
         return true;
@@ -1048,18 +1024,18 @@ pub fn check_proof (proof: &BftProof, h: usize, authorities: &[Address]) -> bool
     })
 }
 
-//#[inline]
-//fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T> {
-//    if let Ok(value) = result {
-//        return Ok(value);
-//    }
-//    Err(err)
-//}
-//
-//#[inline]
-//fn safe_unwrap_option<T>(option: Option<T>, err: BftError) -> BftResult<T> {
-//    if let Some(value) = option {
-//        return Ok(value);
-//    }
-//    Err(err)
-//}
+#[inline]
+fn safe_unwrap_result<T, E>(result: Result<T, E>, err: BftError) -> BftResult<T> {
+    if let Ok(value) = result {
+        return Ok(value);
+    }
+    Err(err)
+}
+
+#[inline]
+fn safe_unwrap_option<T>(option: Option<T>, err: BftError) -> BftResult<T> {
+    if let Some(value) = option {
+        return Ok(value);
+    }
+    Err(err)
+}
