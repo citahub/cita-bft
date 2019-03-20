@@ -41,7 +41,6 @@ pub enum BftError {
     MismatchingBlockTxs,
     SelfPreHashNotReady,
     SelfProofNotReady,
-    AuthVerifyFailed,
     ObsoleteVerifyBlockResp,
     ObsoleteRichStatus,
     GenerateProofFailed,

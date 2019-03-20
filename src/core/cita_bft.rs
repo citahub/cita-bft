@@ -16,7 +16,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use authority_manage::AuthorityManage;
-use bft_rs::{BftMsg, Commit, Feed, Proposal as BftProposal, Status as BftStatus, Vote as BftVote, VoteType};
+use bft_rs::{BftMsg, Commit, Feed, Proposal as BftProposal, Status as BftStatus, Vote as BftVote, VoteType, VerifyResp};
 use bincode::{deserialize, Infinite, serialize};
 use core::collector::{ProposalCollector, VoteCollector, CACHE_NUMBER};
 use core::error::BftError;
@@ -152,10 +152,15 @@ impl Bft {
                     match msg_type {
                         routing_key!(Net >> SignedProposal) => {
                             info!("Receive signed_proposal message!");
-                            let proposal = self.handle_signed_proposal(msg, true)?;
+                            let (proposal, verify_resp) = self.handle_signed_proposal(msg, true)?;
                             info!("Send bft_proposal {:?} to bft-rs!", proposal);
-                            let send_result = self.cita2bft.send(BftMsg::Proposal(proposal));
+                            let send_result = self.cita2bft.send(BftMsg::Proposal(proposal.clone()));
                             safe_unwrap_result(send_result, BftError::SendFailed)?;
+                            if let Some(verify_resp) = verify_resp {
+                                info!("Send verify_resp {:?} to bft-rs!", verify_resp);
+                                let send_result = self.cita2bft.send(BftMsg::VerifyResp(verify_resp));
+                                safe_unwrap_result(send_result, BftError::SendFailed)?;
+                            }
                         }
 
                         routing_key!(Net >> RawBytes) => {
@@ -221,10 +226,18 @@ impl Bft {
 
                         routing_key!(Auth >> VerifyBlockResp) => {
                             info!("Receive verify_block_resp message!");
-                            let proposal = self.handle_verify_block_resp(msg, true)?;
-                            info!("Send verified bft_proposal {:?} to bft-rs!", proposal);
-                            let send_result = self.cita2bft.send(BftMsg::Proposal(proposal));
+                            let verify_resp = self.handle_verify_block_resp(msg, true)?;
+                            info!("Send verify_resp {:?} to bft-rs!", verify_resp);
+                            let send_result = self.cita2bft.send(BftMsg::VerifyResp(verify_resp.clone()));
                             safe_unwrap_result(send_result, BftError::SendFailed)?;
+                            if !verify_resp.is_pass {
+                                let block = self.build_feed_block(BlockTxs::new())?;
+                                self.feed_block = Some(block.clone());
+                                let feed = extract_feed(&block);
+                                info!("Send bft_feed {:?} to bft-rs!", feed);
+                                let send_result = self.cita2bft.send(BftMsg::Feed(feed));
+                                safe_unwrap_result(send_result, BftError::SendFailed)?;
+                            }
                         }
 
                         _ => {
@@ -274,7 +287,7 @@ impl Bft {
         Ok(())
     }
 
-    fn handle_signed_proposal(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftProposal> {
+    fn handle_signed_proposal(&mut self, mut msg: Message, need_wal: bool) -> BftResult<(BftProposal, Option<VerifyResp>)> {
         let signed_proposal = msg.take_signed_proposal();
         let signed_proposal = safe_unwrap_option(signed_proposal, BftError::TakeNoneSignedProposal)?;
         let signature = signed_proposal.get_signature();
@@ -317,23 +330,28 @@ impl Bft {
         self.check_proposer(height, round, &address)?;
         self.check_lock_votes(&proto_proposal, &hash)?;
 
+        let verify_resp = VerifyResp{
+            is_pass: true,
+            proposal: bft_proposal.content.clone(),
+        };
+
         if height < self.height {
-            return Ok(bft_proposal);
+            return Ok((bft_proposal, Some(verify_resp)));
         }
 
         let block_hash = block.crypt_hash();
         if self.verified_proposals.contains(&block_hash) {
-            return Ok(bft_proposal);
+            return Ok((bft_proposal, Some(verify_resp)));
         }
 
         self.check_pre_hash(height, block)?;
         self.check_proof(height, block)?;
         let transactions = block.get_body().get_transactions();
         if transactions.len() == 0 {
-            return Ok(bft_proposal);
+            return Ok((bft_proposal, Some(verify_resp)));
         }
         self.send_auth_for_validation(block, height, round)?;
-        Err(BftError::WaitForAuthValidation)
+        Ok((bft_proposal, None))
     }
 
     fn handle_proposal_in_cache(&mut self, signed_proposal: SignedProposal) -> BftResult<BftProposal> {
@@ -368,13 +386,10 @@ impl Bft {
         Err(BftError::WaitForAuthValidation)
     }
 
-    fn handle_verify_block_resp(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftProposal> {
+    fn handle_verify_block_resp(&mut self, mut msg: Message, need_wal: bool) -> BftResult<VerifyResp> {
         let resp = msg.take_verify_block_resp();
         let resp = safe_unwrap_option(resp, BftError::TakeNoneVerifyBlockResp)?;
-        if resp.get_ret() != auth::Ret::OK {
-            warn!("The block failed to pass the verification of Auth!");
-            return Err(BftError::AuthVerifyFailed);
-        }
+
         let verify_id = resp.get_id();
         let (height, round) = get_idx_from_reqid(verify_id);
         let height = height as usize;
@@ -392,9 +407,24 @@ impl Bft {
         let signed_proposal = self.proposals.get_proposal(height, round);
         let signed_proposal = safe_unwrap_option(signed_proposal, BftError::GetNoneProposal)?;
         let bft_proposal = extract_bft_proposal(&signed_proposal)?;
+
+        if resp.get_ret() != auth::Ret::OK {
+            warn!("The block failed to pass the verification of Auth!");
+            let verify_resp = VerifyResp{
+                is_pass: false,
+                proposal: bft_proposal.content.clone(),
+            };
+            return Ok(verify_resp);
+        }
+
         let hash = H256::from_slice(&(bft_proposal.content));
         self.verified_proposals.push(hash);
-        Ok(bft_proposal)
+
+        let verify_resp = VerifyResp{
+            is_pass: true,
+            proposal: bft_proposal.content,
+        };
+        Ok(verify_resp)
     }
 
     fn handle_raw_bytes(&mut self, mut msg: Message, need_wal: bool) -> BftResult<BftVote> {
@@ -721,9 +751,13 @@ impl Bft {
                 LOG_TYPE_SIGNED_PROPOSAL => {
                     info!("Load signed_proposal!");
                     let msg = Message::try_from(msg).expect("Try from message failed!");
-                    if let Ok(proposal) = self.handle_signed_proposal(msg, false){
+                    if let Ok((proposal, verify_resp)) = self.handle_signed_proposal(msg, false){
                         info!("Send bft_proposal {:?} to bft-rs!", proposal);
                         self.cita2bft.send(BftMsg::Proposal(proposal)).expect("Send bft_proposal failed!");
+                        if let Some(verify_resp) = verify_resp {
+                            info!("Send verify_resp {:?} to bft-rs!", verify_resp);
+                            self.cita2bft.send(BftMsg::VerifyResp(verify_resp)).expect("Send verify_resp failed!");
+                        }
                     };
                 }
                 LOG_TYPE_RAW_BYTES => {
@@ -753,9 +787,9 @@ impl Bft {
                 LOG_TYPE_VERIFY_BLOCK_PESP => {
                     info!("Load verify_block_resp!");
                     let msg = Message::try_from(msg).expect("Try from message failed!");
-                    if let Ok(proposal) = self.handle_verify_block_resp(msg, false) {
-                        info!("Send verified bft_proposal {:?} to bft-rs!", proposal);
-                        self.cita2bft.send(BftMsg::Proposal(proposal)).expect("Send bft_proposal failed!");
+                    if let Ok(verify_resp) = self.handle_verify_block_resp(msg, false) {
+                        info!("Send verified verify_resp {:?} to bft-rs!", verify_resp);
+                        self.cita2bft.send(BftMsg::VerifyResp(verify_resp)).expect("Send verify_resp failed!");
                     };
                 }
                 LOG_TYPE_PROPOSAL => {
