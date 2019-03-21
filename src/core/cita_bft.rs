@@ -117,7 +117,7 @@ impl Bft {
             votes: VoteCollector::new(),
             proposals: ProposalCollector::new(),
             verified_proposals: Vec::new(),
-            wal_log: Wal::new(&*wal_path).expect("Create wal_log failed!"),
+            wal_log: Wal::new(&*wal_path).expect("Cita-bft creates wal_log failed!"),
             auth_manage: AuthorityManage::new(),
             consensus_power: false,
             feed_block: None,
@@ -130,7 +130,7 @@ impl Bft {
             match self.receiver.recv() {
                 Ok(msg) => {
                     if let Err(error) = self.process(msg){
-                        error!("{:?} happened!", error);
+                        error!("Cita-bft encounters {:?}!", error);
                     };
                 }
                 _ => {
@@ -151,36 +151,36 @@ impl Bft {
                 if from_broadcast && self.consensus_power {
                     match msg_type {
                         routing_key!(Net >> SignedProposal) => {
-                            info!("Receive signed_proposal message!");
+                            info!("Cita-bft receives signed_proposal!");
                             let (proposal, verify_resp) = self.handle_signed_proposal(msg, true)?;
-                            info!("Send bft_proposal {:?} to bft-rs!", proposal);
+                            info!("Cita-bft hands over bft_proposal to bft-rs!\n{:?}", proposal);
                             let send_result = self.cita2bft.send(BftMsg::Proposal(proposal.clone()));
                             safe_unwrap_result(send_result, BftError::SendFailed)?;
                             if let Some(verify_resp) = verify_resp {
-                                info!("Send verify_resp {:?} to bft-rs!", verify_resp);
+                                info!("Cita-bft hands over verify_resp to bft-rs without verification of Auth!\n{:?}\n", verify_resp);
                                 let send_result = self.cita2bft.send(BftMsg::VerifyResp(verify_resp));
                                 safe_unwrap_result(send_result, BftError::SendFailed)?;
                             }
                         }
 
                         routing_key!(Net >> RawBytes) => {
-                            info!("Receive raw_bytes message!");
+                            info!("Cita-bft receives raw_bytes!");
                             let vote = self.handle_raw_bytes(msg, true)?;
-                            info!("Send bft_vote {:?} to bft-rs!", vote);
+                            info!("Cita-bft hands over bft_vote to bft-rs!\n{:?}", vote);
                             let send_result = self.cita2bft.send(BftMsg::Vote(vote));
                             safe_unwrap_result(send_result, BftError::SendFailed)?;
                         }
 
                         _ => {
-                            error!("Receive a message with wrong type!");
+                            error!("Cita-bft receives a rabbit-mq message with wrong type {:?}\nin condition of from_broadcast and consensus_power!", msg_type);
                         }
                     }
                 } else {
                     match msg_type {
                         routing_key!(Chain >> RichStatus) => {
-                            info!("Receive rich_status message!");
+                            info!("Cita-bft receives rich_status!");
                             let status = self.handle_rich_status(msg, true)?;
-                            info!("Send bft_status {:?} to bft-rs!", status);
+                            info!("Cita-bft hands over bft_status to bft-rs!\n {:?}", status);
                             let send_result = self.cita2bft.send(BftMsg::Status(status));
                             safe_unwrap_result(send_result, BftError::SendFailed)?;
                             let height = self.height;//ProposalRoundCollector
@@ -188,9 +188,9 @@ impl Bft {
                             let mut round_proposals = proposals.get_mut(&height);
                             if let Some(round_proposals) = round_proposals {
                                 for (_, signed_proposal) in round_proposals.round_proposals.clone().into_iter() {
-                                    info!("Handle signed_proposal message in cache!");
+                                    info!("Cita-bft handles signed_proposal in cache!");
                                     let proposal = self.handle_proposal_in_cache(signed_proposal)?;
-                                    info!("Send cached bft_proposal {:?} to bft-rs!", proposal);
+                                    info!("Cita-bft hands over bft_proposal to bft-rs!\n{:?}", proposal);
                                     let send_result = self.cita2bft.send(BftMsg::Proposal(proposal));
                                     safe_unwrap_result(send_result, BftError::SendFailed)?;
                                 }
@@ -202,11 +202,11 @@ impl Bft {
                                 for (_, step_votes) in round_votes.round_votes.iter() {
                                     for (_, vote_set) in step_votes.step_votes.iter() {
                                         for (bft_vote, _) in vote_set.vote_pair.iter() {
-                                            info!("Handle bft_vote message in cache!");
+                                            info!("Cita-bft handles bft_vote in cache!");
                                             let sender = Address::from_slice(&bft_vote.voter);
                                             self.check_raw_bytes_sender(height, &sender)?;
                                             let bft_vote: BftVote = bft_vote.clone();
-                                            info!("Send cached bft_vote {:?} to bft-rs!", bft_vote);
+                                            info!("Cita-bft hands over bft_vote to bft-rs!\n{:?}", bft_vote);
                                             let send_result = self.cita2bft.send(BftMsg::Vote(bft_vote));
                                             safe_unwrap_result(send_result, BftError::SendFailed)?;
                                         }
@@ -217,31 +217,31 @@ impl Bft {
                         }
 
                         routing_key!(Auth >> BlockTxs) => {
-                            info!("Receive block_txs message!");
+                            info!("Cita-bft receives block_txs!");
                             let feed = self.handle_block_txs(msg, true)?;
-                            info!("Send bft_feed {:?} to bft-rs!", feed);
+                            info!("Cita-bft hands over bft_feed to bft-rs!\n{:?}", feed);
                             let send_result = self.cita2bft.send(BftMsg::Feed(feed));
                             safe_unwrap_result(send_result, BftError::SendFailed)?;
                         }
 
                         routing_key!(Auth >> VerifyBlockResp) => {
-                            info!("Receive verify_block_resp message!");
+                            info!("Cita-bft receives verify_block_resp!");
                             let verify_resp = self.handle_verify_block_resp(msg, true)?;
-                            info!("Send verify_resp {:?} to bft-rs!", verify_resp);
+                            info!("Cita-bft hands over verify_resp to bft-rs!\n{:?}", verify_resp);
                             let send_result = self.cita2bft.send(BftMsg::VerifyResp(verify_resp.clone()));
                             safe_unwrap_result(send_result, BftError::SendFailed)?;
                             if !verify_resp.is_pass {
                                 let block = self.build_feed_block(BlockTxs::new())?;
                                 self.feed_block = Some(block.clone());
                                 let feed = extract_feed(&block);
-                                info!("Send bft_feed {:?} to bft-rs!", feed);
+                                info!("Cita-bft builds empty block and hands over bft_feed to bft-rs!\n{:?}", feed);
                                 let send_result = self.cita2bft.send(BftMsg::Feed(feed));
                                 safe_unwrap_result(send_result, BftError::SendFailed)?;
                             }
                         }
 
                         _ => {
-                            error!("Receive a message with wrong type!");
+                            error!("Cita-bft receives a rabbit-mq message with wrong type {:?}!", msg_type);
                         }
                     }
                 }
@@ -249,9 +249,9 @@ impl Bft {
             MixMsg::BftMsg(msg) => {
                 match msg {
                     BftMsg::Proposal(proposal) => {
-                        info!("Receive bft_proposal message!");
-                        let signed_proposal = self.handle_proposal(proposal.clone(), true)?;
-                        info!("Send signed_proposal {:?} to rabbit_mq!", proposal);
+                        info!("Cita-bft gets bft_proposal!\n{:?}", proposal);
+                        let signed_proposal = self.handle_proposal(proposal, true)?;
+                        info!("Cita-bft sends signed_proposal to rabbit_mq!");
                         let msg: Message = signed_proposal.into();
                         let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
                         let send_result = self.cita2rab.send((routing_key!(Consensus >> SignedProposal).into(), msg));
@@ -259,9 +259,9 @@ impl Bft {
                     }
 
                     BftMsg::Vote(vote) => {
-                        info!("Receive bft_vote message!");
-                        let raw_bytes = self.handle_vote(vote.clone(), true)?;
-                        info!("Send raw_bytes {:?} to rabbit_mq!", vote);
+                        info!("Cita-bft gets bft_vote!\n{:?}", vote);
+                        let raw_bytes = self.handle_vote(vote, true)?;
+                        info!("Cita-bft sends raw_bytes to rabbit_mq!");
                         let msg: Message = raw_bytes.into();
                         let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
                         let send_result = self.cita2rab.send((routing_key!(Consensus >> RawBytes).into(), msg));
@@ -269,9 +269,9 @@ impl Bft {
                     }
 
                     BftMsg::Commit(commit) => {
-                        info!("Receive bft_commit message!");
-                        let block_with_proof = self.handle_commit(commit.clone(), true)?;
-                        info!("Send block_with_proof {:?} to rabbit_mq!", commit);
+                        info!("Cita-bft gets bft_commit!\n{:?}", commit);
+                        let block_with_proof = self.handle_commit(commit, true)?;
+                        info!("Cita-bft sends block_with_proof to rabbit_mq!");
                         let msg: Message = block_with_proof.into();
                         let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
                         let send_result = self.cita2rab.send((routing_key!(Consensus >> BlockWithProof).into(), msg));
@@ -279,7 +279,7 @@ impl Bft {
                     }
 
                     _ => {
-                        error!("Receive a message with wrong type!");
+                        error!("Cita-bft gets a bft-rs message with wrong type {:?}!", msg);
                     }
                 }
             }
@@ -515,12 +515,12 @@ impl Bft {
             .receive_authorities_list(self.height, authorities.clone());
 
         if authorities.contains(&self.signer.address) && !self.consensus_power{
-            info!("Get consensus power in height {} and wake up the bft-rs process!", height);
+            info!("Cita-bft accesses consensus power in height {} and starts the bft-rs process!", height);
             self.consensus_power = true;
             let send_result = self.cita2bft.send(BftMsg::Start);
             safe_unwrap_result(send_result, BftError::SendFailed)?;
         } else if !authorities.contains(&self.signer.address) && self.consensus_power{
-            info!("Lost consensus power in height {} and pause the bft-rs process!", height);
+            info!("Cita-bft loses consensus power in height {} and stops the bft-rs process!", height);
             self.consensus_power = false;
             let send_result = self.cita2bft.send(BftMsg::Pause);
             safe_unwrap_result(send_result, BftError::SendFailed)?;
@@ -619,7 +619,6 @@ impl Bft {
     }
 
     fn generate_proof(&mut self, height: usize, round: usize, hash: H256, lock_votes: Vec<BftVote>) -> BftResult<BftProof> {
-        info!("Generate proof from lock_votes of bft_commit! ");
         let mut commits = HashMap::new();
         {
             let vote_set = self.votes.get_vote_set(height, round, VoteType::Precommit);
@@ -629,12 +628,12 @@ impl Bft {
                         let sender = Address::from_slice(&vote.voter);
                         commits.insert(sender, signed_vote.signature.clone());
                     } else {
-                        error!("Generate proof failed! Search a lock_vote of bft_commit from self.votes failed! ");
+                        error!("Cita-bft generates proof failed!\nSearch a lock_vote of bft_commit from self.votes failed! ");
                         return Err(BftError::GenerateProofFailed);
                     }
                 }
             } else {
-                error!("Generate proof failed! The whole of lock_votes failed searching from self.votes! ");
+                error!("Cita-bft generates proof failed!\nThe whole of lock_votes failed searching from self.votes! ");
                 return Err(BftError::GenerateProofFailed);
             }
         }
@@ -693,7 +692,6 @@ impl Bft {
 
     fn set_new_height(&mut self, height: usize) -> BftResult<()>{
         self.verified_proposals.clear();
-//        self.vote_recv_filter.clear();
         self.feed_block = None;
         self.height = height + 1;
         if let Err(_) = self.wal_log.set_height(self.height){
@@ -744,94 +742,94 @@ impl Bft {
 
 
     fn load_wal_log(&mut self) {
-        info!("Loading wal log!");
+        info!("Cita-bft starts to load wal log!");
         let vec_buf = self.wal_log.load();
         for (msg_type, msg) in vec_buf {
             match msg_type {
                 LOG_TYPE_SIGNED_PROPOSAL => {
-                    info!("Load signed_proposal!");
+                    info!("Cita-bft loads signed_proposal!");
                     let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok((proposal, verify_resp)) = self.handle_signed_proposal(msg, false){
-                        info!("Send bft_proposal {:?} to bft-rs!", proposal);
-                        self.cita2bft.send(BftMsg::Proposal(proposal)).expect("Send bft_proposal failed!");
+                        info!("Cita-bft hands over bft_proposal to bft-rs!\n{:?}", proposal);
+                        self.cita2bft.send(BftMsg::Proposal(proposal)).expect("Cita-bft hands over bft_proposal failed!");
                         if let Some(verify_resp) = verify_resp {
-                            info!("Send verify_resp {:?} to bft-rs!", verify_resp);
-                            self.cita2bft.send(BftMsg::VerifyResp(verify_resp)).expect("Send verify_resp failed!");
+                            info!("Cita-bft hands over verify_resp to bft-rs!\n{:?}", verify_resp);
+                            self.cita2bft.send(BftMsg::VerifyResp(verify_resp)).expect("Cita-bft hands over verify_resp failed!");
                         }
                     };
                 }
                 LOG_TYPE_RAW_BYTES => {
-                    info!("Load raw_bytes!");
+                    info!("Cita-bft loads raw_bytes message!");
                     let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(vote) = self.handle_raw_bytes(msg, false) {
-                        info!("Send bft_vote {:?} to bft-rs!", vote);
-                        self.cita2bft.send(BftMsg::Vote(vote)).expect("Send bft_vote failed!");
+                        info!("Cita-bft hands over bft_vote to bft-rs!\n{:?}", vote);
+                        self.cita2bft.send(BftMsg::Vote(vote)).expect("Cita-bft hands over bft_vote failed!");
                     };
                 }
                 LOG_TYPE_RICH_STATUS => {
-                    info!("Load rich_status!");
+                    info!("Cita-bft loads rich_status message!");
                     let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(status) = self.handle_rich_status(msg, false) {
-                        info!("Send bft_status {:?} to bft-rs!", status);
-                        self.cita2bft.send(BftMsg::Status(status)).expect("Send bft_status failed!");
+                        info!("Cita-bft hands over bft_status to bft-rs!\n{:?}", status);
+                        self.cita2bft.send(BftMsg::Status(status)).expect("Cita-bft hands over bft_status failed!");
                     };
                 }
                 LOG_TYPE_BLOCK_TXS => {
-                    info!("Load block_txs!");
+                    info!("Cita-bft loads block_txs message!");
                     let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(feed) = self.handle_block_txs(msg, false) {
-                        info!("Send bft_feed {:?} to bft-rs!", feed);
-                        self.cita2bft.send(BftMsg::Feed(feed)).expect("Send bft_feed failed!");
+                        info!("Cita-bft hands over bft_feed to bft-rs!\n{:?}", feed);
+                        self.cita2bft.send(BftMsg::Feed(feed)).expect("Cita-bft hands over bft_feed failed!");
                     };
                 }
                 LOG_TYPE_VERIFY_BLOCK_PESP => {
-                    info!("Load verify_block_resp!");
+                    info!("Cita-bft loads verify_block_resp message!");
                     let msg = Message::try_from(msg).expect("Try from message failed!");
                     if let Ok(verify_resp) = self.handle_verify_block_resp(msg, false) {
-                        info!("Send verified verify_resp {:?} to bft-rs!", verify_resp);
-                        self.cita2bft.send(BftMsg::VerifyResp(verify_resp)).expect("Send verify_resp failed!");
+                        info!("Cita-bft hands over verify_resp to bft-rs!\n{:?}", verify_resp);
+                        self.cita2bft.send(BftMsg::VerifyResp(verify_resp)).expect("Cita-bft hands over verify_resp failed!");
                     };
                 }
                 LOG_TYPE_PROPOSAL => {
-                    info!("Load bft_proposal!");
+                    info!("Cita-bft loads bft_proposal message!");
                     let proposal: BftProposal = deserialize(&msg[..]).expect("Deserialize message failed!");
                     if let Ok(signed_proposal) = self.handle_proposal(proposal.clone(), false) {
-                        info!("Send signed_proposal {:?} to rabbit_mq!", proposal);
+                        info!("Cita-bft sends signed_proposal to rabbit_mq!\n{:?}", proposal);
                         let msg: Message = signed_proposal.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> SignedProposal).into(),
                             msg.try_into().expect("Try into message failed!"),
-                        )).expect("Send signed_proposal failed!");;
+                        )).expect("Cita-bft sends signed_proposal failed!");;
                     };
                 }
                 LOG_TYPE_VOTE => {
-                    info!("Load bft_vote!");
+                    info!("Cita-bft loads bft_vote message!");
                     let vote: BftVote = deserialize(&msg[..]).expect("Deserialize message failed!");
                     if let Ok(raw_bytes) = self.handle_vote(vote.clone(), false) {
-                        info!("Send raw_bytes {:?} to rabbit_mq!", vote);
+                        info!("Cita-bft sends raw_bytes to rabbit_mq!\n{:?}", vote);
                         let msg: Message = raw_bytes.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> RawBytes).into(),
                             msg.try_into().expect("Try into message failed!"),
-                        )).expect("Send raw_bytes failed!");
+                        )).expect("Cita-bft sends raw_bytes failed!");
                     };
                 }
                 LOG_TYPE_COMMIT => {
-                    info!("Load bft_commit!");
+                    info!("Cita-bft loads bft_commit message!");
                     let commit: Commit = deserialize(&msg[..]).expect("Deserialize message failed!");
                     if let Ok(block_with_proof) = self.handle_commit(commit.clone(), true) {
-                        info!("Send block_with_proof {:?} to rabbit_mq!", commit);
+                        info!("Cita-bft sends block_with_proof to rabbit_mq!\n{:?}", commit);
                         let msg: Message = block_with_proof.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> BlockWithProof).into(),
                             msg.try_into().expect("Try into message failed!"),
-                        )).expect("Send block_with_proof failed!");
+                        )).expect("Cita-bft sends block_with_proof failed!");
                     };
                 }
                 _ => {}
             }
         }
-        info!("Successfully process the whole wal log!");
+        info!("Cita-bft successfully processes the whole wal log!");
     }
 
 
@@ -844,7 +842,7 @@ impl Bft {
         let mut authority_n = &p.authority_n;
         let mut authorities = &p.authorities;
         if height == *(&p.authority_h_old) {
-            info!("Set the authority manage with old authorities!");
+            info!("Cita-bft sets the authority manage with old authorities!");
             authority_n = &p.authority_n_old;
             authorities = &p.authorities_old;
         }
@@ -872,7 +870,7 @@ impl Bft {
         let p = &self.auth_manage;
         let mut authorities = &p.authorities;
         if height == *(&p.authority_h_old) {
-            info!("Set the authority manage with old authorities!");
+            info!("Cita-bft sets the authority manage with old authorities!");
             authorities = &p.authorities_old;
         }
         if !authorities.contains(sender) {
@@ -920,7 +918,7 @@ impl Bft {
         }
 
         if self.proof.height != height - 1 {
-            info!("Set self.proof from received signed_proposal!");
+            info!("Cita-bft sets self.proof from received signed_proposal!");
             self.proof = proof;
         }
         Ok(())
@@ -967,7 +965,7 @@ impl Bft {
         let p = &self.auth_manage;
         let mut authorities = &p.authorities;
         if height == *(&p.authority_h_old) {
-            info!("Set the authority manage with old authorities!");
+            info!("Cita-bft sets the authority manage with old authorities!");
             authorities = &p.authorities_old;
         }
 
