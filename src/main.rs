@@ -103,8 +103,6 @@ fn main() {
         )
         .get_matches();
 
-//    let bft_log_path = "logs/bft-rs.log";
-
     let mut pk_path = "privkey";
     if let Some(p) = matches.value_of("private") {
         trace!("Value for config: {}", p);
@@ -152,10 +150,10 @@ fn main() {
     thread::spawn(move || loop {
         if let Ok((key, body)) = cita4rab.recv(){
             if let Err(_) = rab_sender.send(MixMsg::RabMsg((key, body))){
-                warn!("Receive message from rabbitMq failed!");
+                error!("Receive message from rabbitMq failed!");
             }
         } else {
-            warn!("Send message to cita_bft failed!");
+            error!("Send message to cita_bft failed!");
         }
     });
 
@@ -170,10 +168,10 @@ fn main() {
     thread::spawn(move || loop {
         if let Ok(msg) = cita4bft.recv(){
             if let Err(_) = sender.send(MixMsg::BftMsg(msg)){
-                warn!("Receive message from bft_rs failed!");
+                error!("Receive message from bft_rs failed!");
             }
         } else {
-            warn!("Send message to cita_bft failed!");
+            error!("Send message to cita_bft failed!");
         }
     });
 

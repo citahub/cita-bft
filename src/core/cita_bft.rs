@@ -130,11 +130,11 @@ impl Bft {
             match self.receiver.recv() {
                 Ok(msg) => {
                     if let Err(error) = self.process(msg){
-                        warn!("{:?} happened!", error);
+                        error!("{:?} happened!", error);
                     };
                 }
                 _ => {
-                    warn!("Cita-bft receives message failed!");
+                    error!("Cita-bft receives message failed!");
                 }
             }
         }
@@ -172,7 +172,7 @@ impl Bft {
                         }
 
                         _ => {
-                            warn!("Receive a message with wrong type!");
+                            error!("Receive a message with wrong type!");
                         }
                     }
                 } else {
@@ -241,7 +241,7 @@ impl Bft {
                         }
 
                         _ => {
-                            warn!("Receive a message with wrong type!");
+                            error!("Receive a message with wrong type!");
                         }
                     }
                 }
@@ -279,7 +279,7 @@ impl Bft {
                     }
 
                     _ => {
-                        warn!("Receive a message with wrong type!");
+                        error!("Receive a message with wrong type!");
                     }
                 }
             }
@@ -409,7 +409,7 @@ impl Bft {
         let bft_proposal = extract_bft_proposal(&signed_proposal)?;
 
         if resp.get_ret() != auth::Ret::OK {
-            warn!("The block failed to pass the verification of Auth!");
+            error!("The block failed to pass the verification of Auth!");
             let verify_resp = VerifyResp{
                 is_pass: false,
                 proposal: bft_proposal.content.clone(),
@@ -445,7 +445,7 @@ impl Bft {
             return Err(BftError::ObsoleteRawBytes);
         }
         if sender != address {
-            warn!("The address recovers from the signature is {:?} which is mismatching with the sender {:?}!", &address, &sender);
+            error!("The address recovers from the signature is {:?} which is mismatching with the sender {:?}!", &address, &sender);
             return Err(BftError::MismatchingVoter);
         }
 
@@ -629,12 +629,12 @@ impl Bft {
                         let sender = Address::from_slice(&vote.voter);
                         commits.insert(sender, signed_vote.signature.clone());
                     } else {
-                        warn!("Generate proof failed! Search a lock_vote of bft_commit from self.votes failed! ");
+                        error!("Generate proof failed! Search a lock_vote of bft_commit from self.votes failed! ");
                         return Err(BftError::GenerateProofFailed);
                     }
                 }
             } else {
-                warn!("Generate proof failed! The whole of lock_votes failed searching from self.votes! ");
+                error!("Generate proof failed! The whole of lock_votes failed searching from self.votes! ");
                 return Err(BftError::GenerateProofFailed);
             }
         }
@@ -697,7 +697,7 @@ impl Bft {
         self.feed_block = None;
         self.height = height + 1;
         if let Err(_) = self.wal_log.set_height(self.height){
-            warn!("Wal log set height {} failed!", self.height);
+            error!("Wal log set height {} failed!", self.height);
             return Err(BftError::SetWalHeightFailed);
         };
         Ok(())
@@ -709,12 +709,12 @@ impl Bft {
         if self.pre_hash.is_some() {
             block.mut_header().set_prevhash(self.pre_hash.unwrap().0.to_vec());
         } else {
-            warn!("Self.pre_hash is not ready!");
+            error!("Self.pre_hash is not ready!");
             return Err(BftError::SelfPreHashNotReady);
         }
         let proof = self.proof.clone();
         if (proof.is_default() || proof.height != self.height - 1) && self.height > 1 {
-            warn!("Self.proof is not ready!");
+            error!("Self.proof is not ready!");
             return Err(BftError::SelfProofNotReady);
         }
         block.mut_header().set_proof(proof.into());
@@ -730,7 +730,7 @@ impl Bft {
 
     fn send_auth_for_validation(&mut self, block: &Block, height: usize, round: usize) -> BftResult<()>  {
         if height != self.height {
-            warn!("The height {} is not equal to self.height {}, which should not happen!", height, self.height);
+            error!("The height {} is not equal to self.height {}, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let reqid = gen_reqid_from_idx(height as u64, round as u64);
@@ -837,7 +837,7 @@ impl Bft {
 
     fn check_proposer(&self, height: usize, round: usize, address: &Address) -> BftResult<()> {
         if height < self.height - 1 {
-            warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
+            error!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let p = &self.auth_manage;
@@ -849,7 +849,7 @@ impl Bft {
             authorities = &p.authorities_old;
         }
         if *authority_n == 0 {
-            warn!("The size of authority manage is empty!");
+            error!("The size of authority manage is empty!");
             return Err(BftError::EmptyAuthManage);
         }
         let proposer_nonce = height + round;
@@ -859,14 +859,14 @@ impl Bft {
         if proposer == address {
             Ok(())
         } else {
-            warn!("The proposer is invalid, while the rightful proposer is {:?}", proposer);
+            error!("The proposer is invalid, while the rightful proposer is {:?}", proposer);
             Err(BftError::InvalidProposer)
         }
     }
 
     fn check_raw_bytes_sender(&self, height: usize, sender: &Address) -> BftResult<()> {
         if height < self.height - 1 {
-            warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
+            error!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let p = &self.auth_manage;
@@ -876,7 +876,7 @@ impl Bft {
             authorities = &p.authorities_old;
         }
         if !authorities.contains(sender) {
-            warn!("The raw_bytes have invalid voter {:?}!", &sender);
+            error!("The raw_bytes have invalid voter {:?}!", &sender);
             return Err(BftError::InvalidVoter);
         }
         Ok(())
@@ -884,7 +884,7 @@ impl Bft {
 
     fn check_pre_hash(&self, height: usize, block: &Block) -> BftResult<()> {
         if height != self.height {
-            warn!("The height {} is not equal to self.height {}, which should not happen!", height, self.height);
+            error!("The height {} is not equal to self.height {}, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         if let Some(hash) = self.pre_hash {
@@ -892,18 +892,18 @@ impl Bft {
             block_prehash.extend_from_slice(block.get_header().get_prevhash());
             let pre_hash = H256::from(block_prehash.as_slice());
             if hash != pre_hash {
-                warn!("The pre_hash of the block is {:?} which is not equal to self.pre_hash {:?}!", &hash, &pre_hash);
+                error!("The pre_hash of the block is {:?} which is not equal to self.pre_hash {:?}!", &hash, &pre_hash);
                 return Err(BftError::MisMatchingPreHash);
             }
             return Ok(());
         }
-        warn!("Self.pre_hash is empty!");
+        error!("Self.pre_hash is empty!");
         Err(BftError::EmptySelfPreHash)
     }
 
     fn check_proof(&mut self, height: usize, block: &Block) -> BftResult<()> {
         if height != self.height {
-            warn!("The height {} is less than self.height {}, which should not happen!", height, self.height);
+            error!("The height {} is less than self.height {}, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
         let block_proof = block.get_header().get_proof();
@@ -911,11 +911,11 @@ impl Bft {
 
         if self.auth_manage.authority_h_old == height - 1 {
             if !check_proof(&proof, height - 1, &self.auth_manage.authorities_old) {
-                warn!("The proof of the block verified failed with old authorities!");
+                error!("The proof of the block verified failed with old authorities!");
                 return Err(BftError::InvalidProof);
             }
         } else if !check_proof(&proof, height - 1, &self.auth_manage.authorities) {
-            warn!("The proof of the block verified failed with newest authorities!");
+            error!("The proof of the block verified failed with newest authorities!");
             return Err(BftError::InvalidProof);
         }
 
@@ -929,7 +929,7 @@ impl Bft {
     fn check_lock_votes(&mut self, proto_proposal: &ProtoProposal, proposal_hash: &H256) -> BftResult<()> {
         let height = proto_proposal.get_height() as usize;
         if height < self.height - 1 {
-            warn!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
+            error!("The height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
 
@@ -960,7 +960,7 @@ impl Bft {
 
     fn check_proto_vote(&mut self, height: usize, round: usize, proposal_hash: &H256, vote: &ProtoVote) -> BftResult<Address> {
         if height < self.height - 1 {
-            warn!("The vote's height {} is less than self.height {} - 1, which should not happen!", height, self.height);
+            error!("The vote's height {} is less than self.height {} - 1, which should not happen!", height, self.height);
             return Err(BftError::ShouldNotHappen);
         }
 
@@ -973,13 +973,13 @@ impl Bft {
 
         let hash = H256::from_slice(vote.get_proposal());
         if hash != *proposal_hash {
-            warn!("The lock votes of proposal {} contains vote for other proposal hash {:?}!", proposal_hash, &hash);
+            error!("The lock votes of proposal {} contains vote for other proposal hash {:?}!", proposal_hash, &hash);
             return Err(BftError::MismatchingVoteProposal);
         }
 
         let sender = Address::from_slice(vote.get_sender());
         if !authorities.contains(&sender) {
-            warn!("The lock votes contains vote with invalid voter {:?}!", &sender);
+            error!("The lock votes contains vote with invalid voter {:?}!", &sender);
             return Err(BftError::InvalidVoter);
         }
 
@@ -992,7 +992,7 @@ impl Bft {
         let signature = Signature::from(signature);
         let address = check_signature(&signature, &hash)?;
         if address != sender {
-            warn!("The address recovers from the signature is {:?} which is mismatching with the sender {:?}!", &address, &sender);
+            error!("The address recovers from the signature is {:?} which is mismatching with the sender {:?}!", &address, &sender);
             return Err(BftError::MismatchingVoter);
         }
 
@@ -1020,7 +1020,7 @@ fn get_idx_from_reqid(reqid: u64) -> (u64, u64) {
 fn check_signature_len(signature: &[u8]) -> BftResult<()> {
     let len = signature.len();
     if len != SIGNATURE_BYTES_LEN {
-        warn!("The length of signature is {} which is not equal to valid length of {}!", len, SIGNATURE_BYTES_LEN);
+        error!("The length of signature is {} which is not equal to valid length of {}!", len, SIGNATURE_BYTES_LEN);
         return Err(BftError::InvalidSigLen);
     }
     Ok(())
@@ -1031,7 +1031,7 @@ fn check_signature(signature: &Signature, hash: &H256) -> BftResult<Address> {
         let address = pubkey_to_address(&pubkey);
         return Ok(address);
     }
-    warn!("The signature verified failed!");
+    error!("The signature verified failed!");
     Err(BftError::InvalidSignature)
 }
 
@@ -1039,7 +1039,7 @@ fn check_block_txs(block: &Block, height: usize) -> BftResult<()> {
     let transactions = block.get_body().get_transactions();
     let verify_ok = block.check_hash();
     if !verify_ok {
-        warn!("The transaction root verified failed!");
+        error!("The transaction root verified failed!");
         return Err(BftError::TransactionRootCheckFailed);
     }
     for tx in transactions.into_iter() {
@@ -1051,17 +1051,17 @@ fn check_block_txs(block: &Block, height: usize) -> BftResult<()> {
 fn check_tx(tx: &Transaction, height: u64) -> BftResult<()> {
     let to = clean_0x(tx.get_to());
     if !to.is_empty() && Address::from_str(to).is_err() {
-        warn!("The receiver's address of the transaction is invalid!");
+        error!("The receiver's address of the transaction is invalid!");
         return Err(BftError::InvalidTxTo);
     }
     let nonce = tx.get_nonce();
     if nonce.len() > 128 {
-        warn!("The nonce of the transaction is invalid!");
+        error!("The nonce of the transaction is invalid!");
         return Err(BftError::InvalidTxNonce);
     }
     let valid_until_block = tx.get_valid_until_block();
     if height > valid_until_block || valid_until_block >= (height + BLOCKLIMIT) {
-        warn!("The valid_util_block of the transaction is invalid!");
+        error!("The valid_util_block of the transaction is invalid!");
         return Err(BftError::InvalidUtilBlock);
     }
     Ok(())
