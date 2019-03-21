@@ -250,8 +250,8 @@ impl Bft {
                 match msg {
                     BftMsg::Proposal(proposal) => {
                         info!("Receive bft_proposal message!");
-                        let signed_proposal = self.handle_proposal(proposal, true)?;
-                        info!("Send signed_proposal {:?} to rabbit_mq!", signed_proposal);
+                        let signed_proposal = self.handle_proposal(proposal.clone(), true)?;
+                        info!("Send signed_proposal {:?} to rabbit_mq!", proposal);
                         let msg: Message = signed_proposal.into();
                         let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
                         let send_result = self.cita2rab.send((routing_key!(Consensus >> SignedProposal).into(), msg));
@@ -260,8 +260,8 @@ impl Bft {
 
                     BftMsg::Vote(vote) => {
                         info!("Receive bft_vote message!");
-                        let raw_bytes = self.handle_vote(vote, true)?;
-                        info!("Send raw_bytes {:?} to rabbit_mq!", raw_bytes);
+                        let raw_bytes = self.handle_vote(vote.clone(), true)?;
+                        info!("Send raw_bytes {:?} to rabbit_mq!", vote);
                         let msg: Message = raw_bytes.into();
                         let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
                         let send_result = self.cita2rab.send((routing_key!(Consensus >> RawBytes).into(), msg));
@@ -270,8 +270,8 @@ impl Bft {
 
                     BftMsg::Commit(commit) => {
                         info!("Receive bft_commit message!");
-                        let block_with_proof = self.handle_commit(commit, true)?;
-                        info!("Send block_with_proof {:?} to rabbit_mq!", block_with_proof);
+                        let block_with_proof = self.handle_commit(commit.clone(), true)?;
+                        info!("Send block_with_proof {:?} to rabbit_mq!", commit);
                         let msg: Message = block_with_proof.into();
                         let msg = safe_unwrap_result(msg.try_into(), BftError::TryIntoMessageFailed)?;
                         let send_result = self.cita2rab.send((routing_key!(Consensus >> BlockWithProof).into(), msg));
@@ -794,9 +794,9 @@ impl Bft {
                 }
                 LOG_TYPE_PROPOSAL => {
                     info!("Load bft_proposal!");
-                    let proposal = deserialize(&msg[..]).expect("Deserialize message failed!");
-                    if let Ok(signed_proposal) = self.handle_proposal(proposal, false) {
-                        info!("Send signed_proposal {:?} to rabbit_mq!", signed_proposal);
+                    let proposal: BftProposal = deserialize(&msg[..]).expect("Deserialize message failed!");
+                    if let Ok(signed_proposal) = self.handle_proposal(proposal.clone(), false) {
+                        info!("Send signed_proposal {:?} to rabbit_mq!", proposal);
                         let msg: Message = signed_proposal.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> SignedProposal).into(),
@@ -806,9 +806,9 @@ impl Bft {
                 }
                 LOG_TYPE_VOTE => {
                     info!("Load bft_vote!");
-                    let vote = deserialize(&msg[..]).expect("Deserialize message failed!");
-                    if let Ok(raw_bytes) = self.handle_vote(vote, false) {
-                        info!("Send raw_bytes {:?} to rabbit_mq!", raw_bytes);
+                    let vote: BftVote = deserialize(&msg[..]).expect("Deserialize message failed!");
+                    if let Ok(raw_bytes) = self.handle_vote(vote.clone(), false) {
+                        info!("Send raw_bytes {:?} to rabbit_mq!", vote);
                         let msg: Message = raw_bytes.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> RawBytes).into(),
@@ -818,9 +818,9 @@ impl Bft {
                 }
                 LOG_TYPE_COMMIT => {
                     info!("Load bft_commit!");
-                    let commit = deserialize(&msg[..]).expect("Deserialize message failed!");
-                    if let Ok(block_with_proof) = self.handle_commit(commit, true) {
-                        info!("Send block_with_proof {:?} to rabbit_mq!", block_with_proof);
+                    let commit: Commit = deserialize(&msg[..]).expect("Deserialize message failed!");
+                    if let Ok(block_with_proof) = self.handle_commit(commit.clone(), true) {
+                        info!("Send block_with_proof {:?} to rabbit_mq!", commit);
                         let msg: Message = block_with_proof.into();
                         self.cita2rab.send((
                             routing_key!(Consensus >> BlockWithProof).into(),
