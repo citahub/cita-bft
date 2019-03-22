@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use core::cita_bft::{BftTurn, Step};
+use crate::core::cita_bft::{BftTurn, Step};
 use min_max_heap::MinMaxHeap;
 use pubsub::channel::{Receiver, Sender};
 use std::collections::HashMap;

@@ -16,14 +16,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use super::Step;
+use crate::crypto::{pubkey_to_address, Sign, Signature};
+use crate::types::{Address, H256};
 use bincode::{serialize, Infinite};
-use crypto::{pubkey_to_address, Sign, Signature};
 use hashable::Hashable;
 use libproto::blockchain::{Block, CompactBlock};
 use libproto::TryFrom;
 use lru_cache::LruCache;
 use std::collections::HashMap;
-use types::{Address, H256};
 
 // height -> round collector
 #[derive(Debug)]

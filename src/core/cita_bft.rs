@@ -20,13 +20,13 @@ use std::convert::Into;
 use authority_manage::AuthorityManage;
 use bincode::{deserialize, serialize, Infinite};
 
-use core::params::BftParams;
-use core::voteset::{Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet};
+use crate::core::params::BftParams;
+use crate::core::voteset::{Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet};
 
-use core::votetime::TimeoutInfo;
-use core::wal::{LogType, Wal};
+use crate::core::votetime::TimeoutInfo;
+use crate::core::wal::{LogType, Wal};
 
-use crypto::{pubkey_to_address, CreateKey, Sign, Signature, SIGNATURE_BYTES_LEN};
+use crate::crypto::{pubkey_to_address, CreateKey, Sign, Signature, SIGNATURE_BYTES_LEN};
 use engine::{unix_now, AsMillis, EngineError, Mismatch};
 use libproto::blockchain::{Block, BlockTxs, BlockWithProof, CompactBlock, RichStatus};
 use libproto::consensus::{
@@ -42,9 +42,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::time::{Duration, Instant};
 
+use crate::types::{Address, H256};
 use cita_directories::DataPath;
 use hashable::Hashable;
-use types::{Address, H256};
 
 const INIT_HEIGHT: usize = 1;
 const INIT_ROUND: usize = 0;

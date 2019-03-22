@@ -16,13 +16,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use super::ntp::Ntp;
-use crypto::{PrivKey, Signer};
+use crate::crypto::{PrivKey, Signer};
+use crate::types::clean_0x;
 use std::cell::Cell;
 use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 use std::time::Duration;
-use types::clean_0x;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {

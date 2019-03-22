@@ -76,9 +76,9 @@ use pubsub::channel;
 use std::thread;
 
 mod core;
-use core::cita_bft::{Bft, BftTurn};
-use core::params::{BftParams, Config, PrivateKey};
-use core::votetime::WaitTimer;
+use crate::core::cita_bft::{Bft, BftTurn};
+use crate::core::params::{BftParams, Config, PrivateKey};
+use crate::core::votetime::WaitTimer;
 use cpuprofiler::PROFILER;
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
