@@ -1623,7 +1623,7 @@ impl Bft {
                         self.consensus_power = false;
                     }
                     self.auth_manage.receive_authorities_list(
-                        self.height,
+                        rich_status.height as usize,
                         &authorities,
                         &validators,
                     );
