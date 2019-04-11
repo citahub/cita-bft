@@ -46,6 +46,7 @@
 //!
 
 extern crate authority_manage;
+extern crate bft_rs as bft;
 extern crate bincode;
 extern crate cita_crypto as crypto;
 extern crate cita_directories;
@@ -71,15 +72,18 @@ extern crate time;
 #[macro_use]
 extern crate util;
 
+use bft::BftActuator;
+use bft::BftMsg;
 use clap::App;
 use pubsub::channel;
 use std::thread;
+use cita_directories::DataPath;
 
 mod core;
-use crate::core::cita_bft::{Bft, BftTurn};
-use crate::core::params::{BftParams, Config, PrivateKey};
-use crate::core::votetime::WaitTimer;
+use crate::core::bft_bridge::BftBridge;
+use crate::core::params::{Config, PrivateKey};
 use cpuprofiler::PROFILER;
+use crate::crypto::Signer;
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
 use std::thread::sleep;
@@ -150,17 +154,6 @@ fn main() {
         .parse::<u64>()
         .unwrap();
 
-    // timer module
-    let (main2timer, timer4main) = channel::unbounded();
-    let (sender, receiver) = channel::unbounded();
-    let timethd = {
-        let sender = sender.clone();
-        thread::spawn(move || {
-            let wt = WaitTimer::new(sender, timer4main);
-            wt.start();
-        })
-    };
-
     // mq pubsub module
     let (tx_sub, rx_sub) = channel::unbounded();
     let (tx_pub, rx_pub) = channel::unbounded();
@@ -177,31 +170,58 @@ fn main() {
         tx_sub,
         rx_pub,
     );
-    thread::spawn(move || loop {
-        let (key, body) = rx_sub.recv().unwrap();
-        let tx = sender.clone();
-        tx.send(BftTurn::Message((key, body))).unwrap();
-    });
 
     let config = Config::new(config_path);
-
     let pk = PrivateKey::new(pk_path);
+    let signer = Signer::from(pk.signer);
 
-    // main cita-bft loop module
-    let params = BftParams::new(&pk);
-    let mainthd = thread::spawn(move || {
-        let mut engine = Bft::new(tx_pub, main2timer, receiver, params);
-        engine.start();
+    let main_thd = thread::spawn(move || {
+        // Split rabbitmq recv_msg
+        let (bft_sender, bft_receiver) = channel::unbounded();
+        let (stat_sender, stat_receiver) = channel::unbounded();
+        let (feed_sender, feed_receiver) = channel::unbounded();
+        let (resp_sender, resp_receiver) = channel::unbounded();
+
+        let wal_path = DataPath::wal_path();
+
+        let engine = BftBridge::new(tx_pub, bft_sender.clone(), feed_receiver, resp_receiver, stat_receiver, pk);
+        BftActuator::start(bft_sender.clone(), bft_receiver, engine, signer.address.to_vec(), &wal_path);
+        loop{
+            let (key, body) = rx_sub.recv().unwrap();
+            let rt_key = RoutingKey::from(&key);
+            match rt_key {
+                routing_key!(Net >> CompactSignedProposal) => {
+                    bft_sender.send(BftMsg::Proposal(body)).unwrap();
+                }
+
+                routing_key!(Net >> RawBytes) => {
+                    bft_sender.send(BftMsg::Vote(body)).unwrap();
+                }
+
+                routing_key!(Chain >> RichStatus) => {
+                    stat_sender.send((key, body)).unwrap();
+                }
+
+                routing_key!(Auth >> BlockTxs) => {
+                    feed_sender.send((key, body)).unwrap();
+                }
+
+                routing_key!(Auth >> VerifyBlockResp) => {
+                    resp_sender.send((key, body)).unwrap();
+                }
+
+                routing_key!(Snapshot >> SnapshotReq) => {
+                    // TODO
+                }
+
+                _ => {}
+            }
+        }
     });
 
     // NTP service
     let ntp_config = config.ntp_config.clone();
-    // Default
-    // let ntp_config = Ntp {
-    //     enabled: true,
-    //     threshold: 3000,
-    //     address: String::from("0.pool.ntp.org:123"),
-    // };
+
     let mut log_tag: u8 = 0;
 
     if ntp_config.enabled {
@@ -223,6 +243,7 @@ fn main() {
 
     profiler(flag_prof_start, flag_prof_duration);
 
-    mainthd.join().unwrap();
-    timethd.join().unwrap();
+    main_thd.join().unwrap();
 }
+
+

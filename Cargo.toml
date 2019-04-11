@@ -9,7 +9,7 @@ dotenv = "0.13.0"
 serde = "1.0"
 serde_derive = "1.0"
 bincode = "0.8.0"
-libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "add_take_compact_block" }
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 clap = "2"
 pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
@@ -27,13 +27,14 @@ authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch
 rustc-hex = "1.0"
 ntp = "0.4.0"
 min-max-heap = "1.2.2"
+bft-rs = { git = "https://github.com/cryptape/bft-rs.git", branch = "v0.3" }
 
 [build-dependencies]
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 
 
 [features]
-default = ["secp256k1", "sha3hash", "rabbitmq"]
+default = ["secp256k1", "sha3hash", "rabbitmq", "verify_req"]
 secp256k1 = ["cita-crypto/secp256k1", "libproto/secp256k1", "proof/secp256k1","engine/secp256k1"]
 ed25519 = ["cita-crypto/ed25519", "libproto/ed25519", "proof/ed25519", "engine/ed25519"]
 sm2 = ["cita-crypto/sm2", "libproto/sm2", "proof/sm2", "engine/sm2"]
@@ -43,3 +44,4 @@ sm3hash = ["hashable/sm3hash", "libproto/sm3hash", "proof/sm3hash", "engine/sm3h
 rabbitmq = ["pubsub/rabbitmq"]
 zeromq = ["pubsub/zeromq"]
 kafka = ["pubsub/kafka"]
+verify_req = ["bft-rs/verify_req"]

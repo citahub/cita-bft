@@ -15,15 +15,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-pub mod cita_bft;
+pub mod bft_bridge;
 pub mod ntp;
 pub mod params;
-pub mod voteset;
-pub mod votetime;
-pub mod wal;
 
-pub use self::cita_bft::*;
+pub use self::bft_bridge::*;
 pub use self::params::*;
-pub use self::voteset::*;
 
 pub use libproto::blockchain::{Block, BlockBody, BlockHeader, Proof, Status, Transaction};
