@@ -25,9 +25,10 @@ use pubsub::channel::{Receiver, Sender, RecvError, select};
 use proof::BftProof;
 use bft::{BftMsg, BftSupport, Commit, Signature as BftSig, Address as BftAddr, Status, Node, Proof, BftActuator};
 use hashable::Hashable;
-use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs};
+use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs, BlockWithProof};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::{TryFrom, TryInto, Message, auth, auth::VerifyBlockResp};
+use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use std::collections::{HashMap, VecDeque};
 
 use engine::{unix_now, AsMillis};
@@ -69,9 +70,7 @@ pub struct Processor {
 
     get_block_resps: HashMap<u64, BlockTxs>,
     check_tx_resps: HashMap<(u64, u64), VerifyBlockResp>,
-
-    is_snapshot: bool,
-    is_cleared: bool,
+    verified_blocks: HashMap<(u64, u64), Block>,
 }
 
 
@@ -116,11 +115,24 @@ impl Processor{
                     }
 
                     routing_key!(Auth >> VerifyBlockResp) => {
-//                        self.resp_sender.send((key, body)).unwrap();
+                        let mut msg = Message::try_from(&body[..]).unwrap();
+                        let resp = msg.take_verify_block_resp().unwrap();
+                        let height = resp.get_height();
+                        let round = resp.get_round();
+                        self.check_tx_resps.entry((height, round)).or_insert(resp.clone());
+                        let block = resp.get_block();
+                        self.verified_blocks.entry((height, round)).or_insert(block.clone());
+                        if let Some((req_height, req_round)) = self.check_tx_reqs.front(){
+                            if let Some(verify_resp) = self.check_tx_resps.get(&(*req_height, *req_round)) {
+                                self.p2b_t.send(BridgeMsg::CheckTxResp(verify_resp.get_pass())).unwrap();
+                                self.check_tx_reqs.pop_front();
+                            }
+                        }
                     }
 
                     routing_key!(Snapshot >> SnapshotReq) => {
-                        // TODO
+                        let msg = Message::try_from(&body[..]).unwrap();
+                        self.process_snapshot(msg);
                     }
 
                     _ => {}
@@ -195,32 +207,14 @@ impl Processor{
             check_tx_reqs: VecDeque::new(),
             get_block_resps: HashMap::new(),
             check_tx_resps: HashMap::new(),
-            is_snapshot: false,
-            is_cleared: false,
+            verified_blocks: HashMap::new(),
         }
     }
 
     fn check_block(&self, _block: &[u8], _height: u64) -> bool{
         true
     }
-    /// A function to check signature.
-    fn check_transaction(&mut self, _block: &[u8], _height: u64, _round: u64) -> bool{
-//        loop{
-//            let (_, body) = self.resp_receiver.recv().unwrap();
-//            let mut msg = Message::try_from(body).unwrap();
-//            let resp = msg.take_verify_block_resp().unwrap();
-//            let block = resp.get_block();
-//            let v_height = resp.get_height();
-//            let v_round = resp.get_round();
-//            if v_height == height && v_round == round {
-//
-//            } else {
-//
-//            }
-//        }
 
-        false
-    }
     /// A funciton to transmit messages.
     fn transmit(&self, msg: BftMsg){
         match msg{
@@ -245,9 +239,23 @@ impl Processor{
             _ => warn!("transmit wrong msg type!"),
         }
     }
-    /// A function to commit the proposal.
-    fn commit(&mut self, _commit: Commit){
 
+    /// A function to commit the proposal.
+    fn commit(&mut self, commit: Commit){
+        let height = commit.height;
+        let round = commit.proof.round;
+        let block = self.verified_blocks.get(&(height, round)).unwrap();
+        let proof = to_bft_proof(&commit.proof);
+        let mut block_with_proof = BlockWithProof::new();
+        block_with_proof.set_blk(block.clone());
+        block_with_proof.set_proof(proof.into());
+        let msg: Message = block_with_proof.clone().into();
+        self.p2r
+            .send((
+                routing_key!(Consensus >> BlockWithProof).into(),
+                msg.try_into().unwrap(),
+            ))
+            .unwrap();
     }
 
     fn get_block (&self, height: u64, block_txs: &BlockTxs) -> Option<Vec<u8>>{
@@ -308,6 +316,51 @@ impl Processor{
             interval: Some(status.interval),
             authority_list,
         }
+    }
+
+    fn process_snapshot(&mut self, mut msg: Message) {
+        if let Some(req) = msg.take_snapshot_req() {
+            match req.cmd {
+                Cmd::Snapshot => {
+                    info!("receive Snapshot::Snapshot: {:?}", req);
+                    self.snapshot_response(Resp::SnapshotAck, true);
+                }
+                Cmd::Begin => {
+                    info!("receive Snapshot::Begin: {:?}", req);
+                    self.bft_actuator.send(BftMsg::Pause).unwrap();
+                    self.snapshot_response(Resp::BeginAck, true);
+
+                }
+                Cmd::Restore => {
+                    info!("receive Snapshot::Restore: {:?}", req);
+                    self.snapshot_response(Resp::RestoreAck, true);
+                }
+                Cmd::Clear => {
+                    info!("receive Snapshot::Clear: {:?}", req);
+                    self.bft_actuator.send(BftMsg::Clear).unwrap();
+                    self.snapshot_response(Resp::ClearAck, true);
+                }
+                Cmd::End => {
+                    info!("receive Snapshot::End: {:?}", req);
+                    self.bft_actuator.send(BftMsg::Start).unwrap();
+                    self.snapshot_response(Resp::EndAck, true);
+                }
+            }
+        }
+    }
+
+    fn snapshot_response(&self, ack: Resp, flag: bool) {
+        info!("snapshot_response ack: {:?}, flag: {}", ack, flag);
+        let mut resp = SnapshotResp::new();
+        resp.set_resp(ack);
+        resp.set_flag(flag);
+        let msg: Message = resp.into();
+        self.p2r
+            .send((
+                routing_key!(Consensus >> SnapshotResp).into(),
+                (&msg).try_into().unwrap(),
+            ))
+            .unwrap();
     }
 }
 

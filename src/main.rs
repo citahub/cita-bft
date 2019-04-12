@@ -184,8 +184,8 @@ fn main() {
         let wal_path = DataPath::wal_path();
 
         let bridge = BftBridge::new(b2p, b4p_b, b4p_f, b4p_s, b4p_t);
-        let bftActuator = BftActuator::new(bridge, signer.address.to_vec(), &wal_path);
-        let mut processor = Processor::new(p2b_b, p2b_f, p2b_s, p2b_t, p2r, p4b, p4r, bftActuator, pk);
+        let bft_actuator = BftActuator::new(bridge, signer.address.to_vec(), &wal_path);
+        let mut processor = Processor::new(p2b_b, p2b_f, p2b_s, p2b_t, p2r, p4b, p4r, bft_actuator, pk);
         processor.start();
     });
 
