@@ -21,26 +21,41 @@ use bincode::{serialize, Infinite};
 use crate::types::{H256, Address};
 use crate::core::params::PrivateKey;
 use crypto::{pubkey_to_address, Signature, Sign, SIGNATURE_BYTES_LEN, Signer};
-use pubsub::channel::{Receiver, Sender};
+use pubsub::channel::{Receiver, Sender, RecvError, select};
 use proof::BftProof;
-use bft::{BftMsg, BftSupport, Commit, Signature as BftSig, Address as BftAddr, Status, Node, Proof};
+use bft::{BftMsg, BftSupport, Commit, Signature as BftSig, Address as BftAddr, Status, Node, Proof, BftActuator};
 use hashable::Hashable;
-use libproto::blockchain::{Block, Proof as ProtoProof, ProofType};
+use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs};
 use libproto::router::{MsgType, RoutingKey, SubModules};
-use libproto::{TryFrom, TryInto, Message, auth};
-use std::collections::HashMap;
+use libproto::{TryFrom, TryInto, Message, auth, auth::VerifyBlockResp};
+use std::collections::{HashMap, VecDeque};
 
 use engine::{unix_now, AsMillis};
 
 pub type PubType = (String, Vec<u8>);
 
-#[derive(Clone)]
-pub struct BftBridge {
-    rab_sender: Sender<PubType>,
-    bft_sender: Sender<BftMsg>,
-    feed_receiver: Receiver<PubType>,
-    resp_receiver: Receiver<PubType>,
-    stat_receiver: Receiver<PubType>,
+pub enum BridgeMsg{
+    CheckBlockReq(Vec<u8>, u64),
+    CheckBlockResp(bool),
+    CheckTxReq(Vec<u8>, u64, u64),
+    CheckTxResp(bool),
+    Transmit(BftMsg),
+    Commit(Commit),
+    GetBlockReq(u64),
+    GetBlockResp(Option<Vec<u8>>),
+    SignReq(Vec<u8>),
+    SignResp(Option<BftSig>),
+}
+
+pub struct Processor {
+    p2b_b: Sender<BridgeMsg>,
+    p2b_f: Sender<BridgeMsg>,
+    p2b_s: Sender<BridgeMsg>,
+    p2b_t: Sender<BridgeMsg>,
+    p2r: Sender<PubType>,
+    p4b: Receiver<BridgeMsg>,
+    p4r: Receiver<PubType>,
+    bft_actuator: BftActuator,
 
     signer: PrivateKey,
     address: BftAddr,
@@ -49,35 +64,220 @@ pub struct BftBridge {
     pre_hash: HashMap<u64, H256>,
     version:  HashMap<u64, u32>,
 
+    get_block_reqs: VecDeque<u64>,
+    check_tx_reqs: VecDeque<(u64, u64)>,
+
+    get_block_resps: HashMap<u64, BlockTxs>,
+    check_tx_resps: HashMap<(u64, u64), VerifyBlockResp>,
+
     is_snapshot: bool,
     is_cleared: bool,
 }
 
 
 
-impl BftBridge{
-    pub fn new(rab_sender: Sender<PubType>,
-               bft_sender: Sender<BftMsg>,
-               feed_receiver: Receiver<PubType>,
-               resp_receiver: Receiver<PubType>,
-               stat_receiver: Receiver<PubType>,
+impl Processor{
+    pub fn start(&mut self){
+        loop{
+            let mut get_rab_msg = Err(RecvError);
+            let mut get_bridge_msg = Err(RecvError);
+
+            select! {
+                recv(self.p4r) -> msg => get_rab_msg = msg,
+                recv(self.p4b) -> msg => get_bridge_msg = msg,
+            }
+
+            if let Ok((key, body)) = get_rab_msg {
+                let rt_key = RoutingKey::from(&key);
+                match rt_key {
+                    routing_key!(Net >> CompactSignedProposal) => {
+                        self.bft_actuator.send(BftMsg::Proposal(body)).unwrap();
+                    }
+
+                    routing_key!(Net >> RawBytes) => {
+                        self.bft_actuator.send(BftMsg::Vote(body)).unwrap();
+                    }
+
+                    routing_key!(Chain >> RichStatus) => {
+                        let status = self.extract_status(&body[..]);
+                        self.bft_actuator.send(BftMsg::Status(status)).unwrap();
+                    }
+
+                    routing_key!(Auth >> BlockTxs) => {
+                        let mut msg = Message::try_from(&body[..]).unwrap();
+                        let block_txs = msg.take_block_txs().unwrap();
+                        self.get_block_resps.entry(block_txs.get_height()).or_insert(block_txs);
+                        if let Some(req_height) = self.get_block_reqs.front(){
+                            if let Some(block_txs) = self.get_block_resps.get(req_height) {
+                                self.p2b_f.send(BridgeMsg::GetBlockResp(self.get_block(*req_height, block_txs))).unwrap();
+                                self.get_block_reqs.pop_front();
+                            }
+                        }
+                    }
+
+                    routing_key!(Auth >> VerifyBlockResp) => {
+//                        self.resp_sender.send((key, body)).unwrap();
+                    }
+
+                    routing_key!(Snapshot >> SnapshotReq) => {
+                        // TODO
+                    }
+
+                    _ => {}
+                }
+            }
+
+            if let Ok(bridge_msg) = get_bridge_msg {
+                match bridge_msg{
+                    BridgeMsg::GetBlockReq(height) => {
+                        self.get_block_reqs.push_back(height);
+                    }
+
+                    BridgeMsg::CheckBlockReq(block, height) => {
+                        self.p2b_b.send(BridgeMsg::CheckBlockResp(self.check_block(&block, height))).unwrap();
+                    }
+
+                    BridgeMsg::CheckTxReq(block, height, round) => {
+                        let msg = get_block_req_msg(&block, height, round);
+                        self.p2r
+                            .send((
+                                routing_key!(Consensus >> VerifyBlockReq).into(),
+                                msg.clone().try_into().unwrap(),
+                            ))
+                            .unwrap();
+                        self.check_tx_reqs.push_back((height, round));
+                    }
+
+                    BridgeMsg::SignReq(hash) => {
+                        self.p2b_s.send(BridgeMsg::SignResp(self.sign(&hash))).unwrap();
+                    }
+
+                    BridgeMsg::Transmit(bft_msg) => {
+                        self.transmit(bft_msg);
+                    }
+
+                    BridgeMsg::Commit(commit) => {
+                        self.commit(commit);
+                    }
+
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    pub fn new(p2b_b: Sender<BridgeMsg>,
+               p2b_f: Sender<BridgeMsg>,
+               p2b_s: Sender<BridgeMsg>,
+               p2b_t: Sender<BridgeMsg>,
+               p2r: Sender<PubType>,
+               p4b: Receiver<BridgeMsg>,
+               p4r: Receiver<PubType>,
+               bft_actuator: BftActuator,
                pk: PrivateKey) -> Self{
         let signer = Signer::from(pk.signer.clone());
         let address = signer.address.to_vec();
-        BftBridge{
-            rab_sender,
-            bft_sender,
-            feed_receiver,
-            resp_receiver,
-            stat_receiver,
+        Processor{
+            p2b_b,
+            p2b_f,
+            p2b_s,
+            p2b_t,
+            p2r,
+            p4b,
+            p4r,
+            bft_actuator,
             signer: pk,
             address,
             proof: HashMap::new(),
             pre_hash: HashMap::new(),
             version: HashMap::new(),
+            get_block_reqs: VecDeque::new(),
+            check_tx_reqs: VecDeque::new(),
+            get_block_resps: HashMap::new(),
+            check_tx_resps: HashMap::new(),
             is_snapshot: false,
             is_cleared: false,
         }
+    }
+
+    fn check_block(&self, _block: &[u8], _height: u64) -> bool{
+        true
+    }
+    /// A function to check signature.
+    fn check_transaction(&mut self, _block: &[u8], _height: u64, _round: u64) -> bool{
+//        loop{
+//            let (_, body) = self.resp_receiver.recv().unwrap();
+//            let mut msg = Message::try_from(body).unwrap();
+//            let resp = msg.take_verify_block_resp().unwrap();
+//            let block = resp.get_block();
+//            let v_height = resp.get_height();
+//            let v_round = resp.get_round();
+//            if v_height == height && v_round == round {
+//
+//            } else {
+//
+//            }
+//        }
+
+        false
+    }
+    /// A funciton to transmit messages.
+    fn transmit(&self, msg: BftMsg){
+        match msg{
+            BftMsg::Proposal(encode) => {
+                self.p2r
+                    .send((
+                        routing_key!(Consensus >> CompactSignedProposal).into(),
+                        encode,
+                    ))
+                    .unwrap();
+            }
+
+            BftMsg::Vote(encode) => {
+                self.p2r
+                    .send((
+                        routing_key!(Consensus >> RawBytes).into(),
+                        encode,
+                    ))
+                    .unwrap();
+            }
+
+            _ => warn!("transmit wrong msg type!"),
+        }
+    }
+    /// A function to commit the proposal.
+    fn commit(&mut self, _commit: Commit){
+
+    }
+
+    fn get_block (&self, height: u64, block_txs: &BlockTxs) -> Option<Vec<u8>>{
+        let version = self.version.get(&height);
+        let pre_hash = self.pre_hash.get(&height);
+        let proof = self.proof.get(&height);
+        if version.is_none() || pre_hash.is_none() || proof.is_none(){
+            return None;
+        }
+        let mut block = Block::new();
+        block.set_version(*version.unwrap());
+        block.set_body(block_txs.clone().take_body());
+        block.mut_header().set_prevhash(pre_hash.unwrap().0.to_vec());
+        let bft_proof = to_bft_proof(proof.unwrap());
+        block.mut_header().set_proof(bft_proof);
+        let block_time = unix_now();
+        block.mut_header().set_timestamp(AsMillis::as_millis(&block_time));
+        block.mut_header().set_height(height);
+        let transactions_root = block.get_body().transactions_root();
+        block.mut_header().set_transactions_root(transactions_root.to_vec());
+        block.mut_header().set_proposer(self.address.clone());
+        let blk = block.clone().compact().try_into().unwrap();
+        return Some(blk);
+    }
+
+    fn sign(&self, hash: &[u8]) -> Option<BftSig>{
+        if let Ok(signature) = Signature::sign(&self.signer.signer, &H256::from(hash)){
+            return Some((&signature.0).to_vec());
+        }
+        None
     }
 
     fn extract_status(&mut self, body: &[u8]) -> Status{
@@ -111,104 +311,68 @@ impl BftBridge{
     }
 }
 
-impl BftSupport for BftBridge {
+pub struct BftBridge {
+    b2p: Sender<BridgeMsg>,
+    b4p_b: Receiver<BridgeMsg>,
+    b4p_f: Receiver<BridgeMsg>,
+    b4p_s: Receiver<BridgeMsg>,
+    b4p_t: Receiver<BridgeMsg>,
+}
 
-    fn start(&mut self){
-        loop{
-            let (_, body) = self.stat_receiver.recv().unwrap();
-            let status = self.extract_status(&body[..]);
-            self.bft_sender.send(BftMsg::Status(status)).unwrap();
+impl BftBridge {
+    pub fn new(b2p: Sender<BridgeMsg>,
+               b4p_b: Receiver<BridgeMsg>,
+               b4p_f: Receiver<BridgeMsg>,
+               b4p_s: Receiver<BridgeMsg>,
+               b4p_t: Receiver<BridgeMsg>
+    ) -> Self{
+        BftBridge{
+            b2p,
+            b4p_b,
+            b4p_f,
+            b4p_s,
+            b4p_t,
         }
     }
+}
 
-    fn check_block(&self, _block: &[u8], _height: u64) -> bool{
-        true
+impl BftSupport for BftBridge {
+    fn check_block(&self, block: &[u8], height: u64) -> bool{
+        self.b2p.send(BridgeMsg::CheckBlockReq(block.to_vec(), height)).unwrap();
+        if let BridgeMsg::CheckBlockResp(is_pass) = self.b4p_b.recv().unwrap(){
+            return is_pass;
+        }
+        false
     }
     /// A function to check signature.
-    fn check_transaction(&mut self, block: &[u8], height: u64, round: u64) -> bool{
-        let mut msg = Message::try_from(block).unwrap();
-        let compact_block = msg.take_compact_block().unwrap();
-        let mut verify_req = auth::VerifyBlockReq::new();
-        verify_req.set_height(height);
-        verify_req.set_round(round);
-        verify_req.set_block(compact_block);
-        let msg: Message = verify_req.into();
-//        msg.set_origin(csp_msg.get_origin());   明天问下博宇这个参数是干什么的?
-        self.rab_sender
-            .send((
-                routing_key!(Consensus >> VerifyBlockReq).into(),
-                msg.clone().try_into().unwrap(),
-            ))
-            .unwrap();
-
+    fn check_transaction(&self, block: &[u8], height: u64, round: u64) -> bool{
+        self.b2p.send(BridgeMsg::CheckTxReq(block.to_vec(), height, round)).unwrap();
+        if let BridgeMsg::CheckTxResp(is_pass) = self.b4p_t.recv().unwrap(){
+            return is_pass;
+        }
         false
     }
     /// A funciton to transmit messages.
     fn transmit(&self, msg: BftMsg){
-        match msg{
-            BftMsg::Proposal(encode) => {
-                self.rab_sender
-                    .send((
-                        routing_key!(Consensus >> CompactSignedProposal).into(),
-                        encode,
-                    ))
-                    .unwrap();
-            }
-
-            BftMsg::Vote(encode) => {
-                self.rab_sender
-                    .send((
-                        routing_key!(Consensus >> RawBytes).into(),
-                        encode,
-                    ))
-                    .unwrap();
-            }
-
-            _ => warn!("transmit wrong msg type!"),
-        }
+        self.b2p.send(BridgeMsg::Transmit(msg)).unwrap();
     }
     /// A function to commit the proposal.
-    fn commit(&mut self, _commit: Commit){
-
-
+    fn commit(&self, commit: Commit){
+        self.b2p.send(BridgeMsg::Commit(commit)).unwrap();
     }
 
     fn get_block(&self, height: u64) -> Option<Vec<u8>>{
-        loop{
-            let (_, body) = self.feed_receiver.recv().unwrap();
-            let mut msg = Message::try_from(&body[..]).unwrap();
-            let mut block_txs = msg.take_block_txs().unwrap();
-
-            if height == block_txs.get_height() {
-                let version = self.version.get(&height);
-                let pre_hash = self.pre_hash.get(&height);
-                let proof = self.proof.get(&height);
-                if version.is_none() || pre_hash.is_none() || proof.is_none(){
-                    return None;
-                }
-                let mut block = Block::new();
-                block.set_version(*version.unwrap());
-                block.set_body(block_txs.take_body().clone());
-                block.mut_header().set_prevhash(pre_hash.unwrap().0.to_vec());
-                let bft_proof = to_bft_proof(proof.unwrap());
-                block.mut_header().set_proof(bft_proof);
-                let block_time = unix_now();
-                block.mut_header().set_timestamp(AsMillis::as_millis(&block_time));
-                block.mut_header().set_height(height);
-                let transactions_root = block.get_body().transactions_root();
-                block.mut_header().set_transactions_root(transactions_root.to_vec());
-                block.mut_header().set_proposer(self.address.clone());
-                let blk = block.clone().compact().try_into().unwrap();
-                return Some(blk);
-            } else if height < block_txs.get_height() {
-                return None;
-            }
+        self.b2p.send(BridgeMsg::GetBlockReq(height)).unwrap();
+        if let BridgeMsg::GetBlockResp(block) = self.b4p_f.recv().unwrap(){
+            return block;
         }
+        None
     }
 
     fn sign(&self, hash: &[u8]) -> Option<BftSig>{
-        if let Ok(signature) = Signature::sign(&self.signer.signer, &H256::from(hash)){
-            return Some((&signature.0).to_vec());
+        self.b2p.send(BridgeMsg::SignReq(hash.to_vec())).unwrap();
+        if let BridgeMsg::SignResp(sign) = self.b4p_s.recv().unwrap(){
+            return sign;
         }
         None
     }
@@ -246,6 +410,19 @@ fn to_bft_proof(proof: &Proof) -> ProtoProof {
     proof.set_content(encoded_proof);
     proof.set_field_type(ProofType::Bft);
     proof
+}
+
+fn get_block_req_msg (block: &[u8], height: u64, round: u64) -> Message{
+    let mut msg = Message::try_from(block).unwrap();
+    let origin = msg.get_origin();
+    let compact_block = msg.take_compact_block().unwrap();
+    let mut verify_req = auth::VerifyBlockReq::new();
+    verify_req.set_height(height);
+    verify_req.set_round(round);
+    verify_req.set_block(compact_block);
+    let mut msg: Message = verify_req.into();
+    msg.set_origin(origin);
+    msg
 }
 
 

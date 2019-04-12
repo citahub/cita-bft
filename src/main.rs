@@ -73,14 +73,13 @@ extern crate time;
 extern crate util;
 
 use bft::BftActuator;
-use bft::BftMsg;
 use clap::App;
 use pubsub::channel;
 use std::thread;
 use cita_directories::DataPath;
 
 mod core;
-use crate::core::bft_bridge::BftBridge;
+use crate::core::bft_bridge::{Processor, BftBridge};
 use crate::core::params::{Config, PrivateKey};
 use cpuprofiler::PROFILER;
 use crate::crypto::Signer;
@@ -155,8 +154,8 @@ fn main() {
         .unwrap();
 
     // mq pubsub module
-    let (tx_sub, rx_sub) = channel::unbounded();
-    let (tx_pub, rx_pub) = channel::unbounded();
+    let (r2p, p4r) = channel::unbounded();
+    let (p2r, r4p) = channel::unbounded();
     start_pubsub(
         "consensus",
         routing_key!([
@@ -167,8 +166,8 @@ fn main() {
             Auth >> VerifyBlockResp,
             Snapshot >> SnapshotReq,
         ]),
-        tx_sub,
-        rx_pub,
+        r2p,
+        r4p,
     );
 
     let config = Config::new(config_path);
@@ -176,47 +175,18 @@ fn main() {
     let signer = Signer::from(pk.signer);
 
     let main_thd = thread::spawn(move || {
-        // Split rabbitmq recv_msg
-        let (bft_sender, bft_receiver) = channel::unbounded();
-        let (stat_sender, stat_receiver) = channel::unbounded();
-        let (feed_sender, feed_receiver) = channel::unbounded();
-        let (resp_sender, resp_receiver) = channel::unbounded();
+        let (b2p, p4b) = channel::unbounded();
+        let (p2b_b, b4p_b) = channel::unbounded();
+        let (p2b_f, b4p_f) = channel::unbounded();
+        let (p2b_s, b4p_s) = channel::unbounded();
+        let (p2b_t, b4p_t) = channel::unbounded();
 
         let wal_path = DataPath::wal_path();
 
-        let engine = BftBridge::new(tx_pub, bft_sender.clone(), feed_receiver, resp_receiver, stat_receiver, pk);
-        BftActuator::start(bft_sender.clone(), bft_receiver, engine, signer.address.to_vec(), &wal_path);
-        loop{
-            let (key, body) = rx_sub.recv().unwrap();
-            let rt_key = RoutingKey::from(&key);
-            match rt_key {
-                routing_key!(Net >> CompactSignedProposal) => {
-                    bft_sender.send(BftMsg::Proposal(body)).unwrap();
-                }
-
-                routing_key!(Net >> RawBytes) => {
-                    bft_sender.send(BftMsg::Vote(body)).unwrap();
-                }
-
-                routing_key!(Chain >> RichStatus) => {
-                    stat_sender.send((key, body)).unwrap();
-                }
-
-                routing_key!(Auth >> BlockTxs) => {
-                    feed_sender.send((key, body)).unwrap();
-                }
-
-                routing_key!(Auth >> VerifyBlockResp) => {
-                    resp_sender.send((key, body)).unwrap();
-                }
-
-                routing_key!(Snapshot >> SnapshotReq) => {
-                    // TODO
-                }
-
-                _ => {}
-            }
-        }
+        let bridge = BftBridge::new(b2p, b4p_b, b4p_f, b4p_s, b4p_t);
+        let bftActuator = BftActuator::new(bridge, signer.address.to_vec(), &wal_path);
+        let mut processor = Processor::new(p2b_b, p2b_f, p2b_s, p2b_t, p2r, p4b, p4r, bftActuator, pk);
+        processor.start();
     });
 
     // NTP service
