@@ -110,6 +110,9 @@ fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
 fn main() {
+    micro_service_init!("cita-bft", "CITA:consensus:cita-bft");
+    info!("Version: {}", get_build_info_str(true));
+
     let matches = App::new("cita-bft")
         .version(get_build_info_str(true))
         .long_version(get_build_info_str(false))
@@ -123,12 +126,7 @@ fn main() {
         .args_from_usage(
             "--prof-duration=[0] 'Specify the duration for profiling, zero means no profiling'",
         )
-        .args_from_usage("-s, --stdout 'Log to console'")
         .get_matches();
-
-    let stdout = matches.is_present("stdout");
-    micro_service_init!("cita-bft", "CITA:consensus:cita-bft", stdout);
-    info!("Version: {}", get_build_info_str(true));
 
     let mut config_path = "consensus.toml";
     if let Some(c) = matches.value_of("config") {
