@@ -243,9 +243,11 @@ impl Processor{
     /// A function to commit the proposal.
     fn commit(&mut self, commit: Commit){
         let height = commit.height;
-        let round = commit.proof.round;
+        let proof = commit.proof;
+        let round = proof.round;
         let block = self.verified_blocks.get(&(height, round)).unwrap();
-        let proof = to_bft_proof(&commit.proof);
+        self.proof.entry(height).or_insert(proof.clone());
+        let proof = to_bft_proof(&proof);
         let mut block_with_proof = BlockWithProof::new();
         block_with_proof.set_blk(block.clone());
         block_with_proof.set_proof(proof.into());
@@ -256,12 +258,13 @@ impl Processor{
                 msg.try_into().unwrap(),
             ))
             .unwrap();
+        self.clean_cache(height - 1);
     }
 
     fn get_block (&self, height: u64, block_txs: &BlockTxs) -> Option<Vec<u8>>{
-        let version = self.version.get(&height);
-        let pre_hash = self.pre_hash.get(&height);
-        let proof = self.proof.get(&height);
+        let version = self.version.get(&(height - 1));
+        let pre_hash = self.pre_hash.get(&(height - 1));
+        let proof = self.proof.get(&(height - 1));
         if version.is_none() || pre_hash.is_none() || proof.is_none(){
             return None;
         }
@@ -361,6 +364,15 @@ impl Processor{
                 (&msg).try_into().unwrap(),
             ))
             .unwrap();
+    }
+
+    fn clean_cache(&mut self, height: u64) {
+        self.proof.retain(|&hi, _| hi >= height);
+        self.pre_hash.retain(|&hi, _| hi >= height);
+        self.version.retain(|&hi, _| hi >= height);
+        self.get_block_resps.retain(|&hi, _| hi >= height);
+        self.check_tx_resps.retain(|(hi, _), _| *hi >= height);
+        self.verified_blocks.retain(|(hi, _), _| *hi >= height);
     }
 }
 
