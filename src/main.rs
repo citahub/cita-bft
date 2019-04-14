@@ -80,32 +80,33 @@ use cita_directories::DataPath;
 
 mod core;
 use crate::core::bft_bridge::{Processor, BftBridge};
-use crate::core::params::{Config, PrivateKey};
-use cpuprofiler::PROFILER;
+//use crate::core::params::{Config, PrivateKey};
+use crate::core::params::PrivateKey;
+//use cpuprofiler::PROFILER;
 use crate::crypto::Signer;
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
-use std::thread::sleep;
-use std::time::Duration;
+//use std::thread::sleep;
+//use std::time::Duration;
 use util::set_panic_handler;
 
-fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
-    //start profiling
-    if flag_prof_duration != 0 {
-        let start = flag_prof_start;
-        let duration = flag_prof_duration;
-        thread::spawn(move || {
-            thread::sleep(std::time::Duration::new(start, 0));
-            PROFILER
-                .lock()
-                .unwrap()
-                .start("./tdmint.profiler")
-                .expect("Couldn't start");
-            thread::sleep(std::time::Duration::new(duration, 0));
-            PROFILER.lock().unwrap().stop().unwrap();
-        });
-    }
-}
+//fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
+//    //start profiling
+//    if flag_prof_duration != 0 {
+//        let start = flag_prof_start;
+//        let duration = flag_prof_duration;
+//        thread::spawn(move || {
+//            thread::sleep(std::time::Duration::new(start, 0));
+//            PROFILER
+//                .lock()
+//                .unwrap()
+//                .start("./tdmint.profiler")
+//                .expect("Couldn't start");
+//            thread::sleep(std::time::Duration::new(duration, 0));
+//            PROFILER.lock().unwrap().stop().unwrap();
+//        });
+//    }
+//}
 
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
@@ -128,11 +129,11 @@ fn main() {
         )
         .get_matches();
 
-    let mut config_path = "consensus.toml";
-    if let Some(c) = matches.value_of("config") {
-        trace!("Value for config: {}", c);
-        config_path = c;
-    }
+//    let mut config_path = "consensus.toml";
+//    if let Some(c) = matches.value_of("config") {
+//        trace!("Value for config: {}", c);
+//        config_path = c;
+//    }
 
     let mut pk_path = "privkey";
     if let Some(p) = matches.value_of("private") {
@@ -140,16 +141,16 @@ fn main() {
         pk_path = p;
     }
 
-    let flag_prof_start = matches
-        .value_of("prof-start")
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap();
-    let flag_prof_duration = matches
-        .value_of("prof-duration")
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap();
+//    let flag_prof_start = matches
+//        .value_of("prof-start")
+//        .unwrap_or("0")
+//        .parse::<u64>()
+//        .unwrap();
+//    let flag_prof_duration = matches
+//        .value_of("prof-duration")
+//        .unwrap_or("0")
+//        .parse::<u64>()
+//        .unwrap();
 
     // mq pubsub module
     let (r2p, p4r) = channel::unbounded();
@@ -168,7 +169,7 @@ fn main() {
         r4p,
     );
 
-    let config = Config::new(config_path);
+//    let config = Config::new(config_path);
     let pk = PrivateKey::new(pk_path);
     let signer = Signer::from(pk.signer);
 
@@ -182,34 +183,37 @@ fn main() {
         let wal_path = DataPath::wal_path();
 
         let bridge = BftBridge::new(b2p, b4p_b, b4p_f, b4p_s, b4p_t);
+        trace!("Bft bridge initialized!");
         let bft_actuator = BftActuator::new(bridge, signer.address.to_vec(), &wal_path);
+        trace!("Bft actuator initialized!");
         let mut processor = Processor::new(p2b_b, p2b_f, p2b_s, p2b_t, p2r, p4b, p4r, bft_actuator, pk);
+        trace!("Processor initialized!");
         processor.start();
     });
 
     // NTP service
-    let ntp_config = config.ntp_config.clone();
+//    let ntp_config = config.ntp_config.clone();
+//
+//    let mut log_tag: u8 = 0;
 
-    let mut log_tag: u8 = 0;
+//    if ntp_config.enabled {
+//        thread::spawn(move || loop {
+//            if ntp_config.is_clock_offset_overflow() {
+//                warn!("System clock seems off!!!");
+//                log_tag += 1;
+//                if log_tag == 10 {
+//                    log_tag = 0;
+//                    sleep(Duration::new(1000, 0));
+//                }
+//            } else {
+//                log_tag = 0;
+//            }
+//
+//            sleep(Duration::new(10, 0));
+//        });
+//    }
 
-    if ntp_config.enabled {
-        thread::spawn(move || loop {
-            if ntp_config.is_clock_offset_overflow() {
-                warn!("System clock seems off!!!");
-                log_tag += 1;
-                if log_tag == 10 {
-                    log_tag = 0;
-                    sleep(Duration::new(1000, 0));
-                }
-            } else {
-                log_tag = 0;
-            }
-
-            sleep(Duration::new(10, 0));
-        });
-    }
-
-    profiler(flag_prof_start, flag_prof_duration);
+//    profiler(flag_prof_start, flag_prof_duration);
 
     main_thd.join().unwrap();
 }

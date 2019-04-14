@@ -90,10 +90,12 @@ impl Processor{
                 let rt_key = RoutingKey::from(&key);
                 match rt_key {
                     routing_key!(Net >> CompactSignedProposal) => {
+                        trace!("Processor receives bft_signed_proposal:{:?}!", &body[0..5]);
                         self.bft_actuator.send(BftMsg::Proposal(body)).unwrap();
                     }
 
                     routing_key!(Net >> RawBytes) => {
+                        trace!("Processor receives bft_signed_vote:{:?}!", &body[0..5]);
                         self.bft_actuator.send(BftMsg::Vote(body)).unwrap();
                     }
 
@@ -105,12 +107,14 @@ impl Processor{
                     routing_key!(Auth >> BlockTxs) => {
                         let mut msg = Message::try_from(&body[..]).unwrap();
                         let block_txs = msg.take_block_txs().unwrap();
+                        trace!("Processor receives block_txs{{height:{}}}!", block_txs.get_height());
                         self.get_block_resps.entry(block_txs.get_height()).or_insert(block_txs);
-                        if let Some(req_height) = self.get_block_reqs.front(){
-                            if let Some(block_txs) = self.get_block_resps.get(req_height) {
-                                self.p2b_f.send(BridgeMsg::GetBlockResp(self.get_block(*req_height, block_txs))).unwrap();
-                                self.get_block_reqs.pop_front();
-                            }
+
+                        let mut flag = true;
+                        let mut front_h = self.get_block_reqs.front();
+                        while front_h.is_some() && flag {
+                            flag = self.try_feed_bft(*front_h.unwrap());
+                            front_h = self.get_block_reqs.front();
                         }
                     }
 
@@ -119,14 +123,22 @@ impl Processor{
                         let resp = msg.take_verify_block_resp().unwrap();
                         let height = resp.get_height();
                         let round = resp.get_round();
+                        trace!("Processor receives verify_block_resp{{height:{}, round:{}, is_pass:{}}}!", height, round, resp.get_pass());
                         self.check_tx_resps.entry((height, round)).or_insert(resp.clone());
                         let block = resp.get_block();
                         self.verified_blocks.entry((height, round)).or_insert(block.clone());
-                        if let Some((req_height, req_round)) = self.check_tx_reqs.front(){
+
+                        let mut flag = true;
+                        let mut front_h_r = self.check_tx_reqs.front();
+                        while front_h_r.is_some() && flag{
+                            let (req_height, req_round) = front_h_r.unwrap();
                             if let Some(verify_resp) = self.check_tx_resps.get(&(*req_height, *req_round)) {
                                 self.p2b_t.send(BridgeMsg::CheckTxResp(verify_resp.get_pass())).unwrap();
                                 self.check_tx_reqs.pop_front();
+                            } else {
+                                flag = false;
                             }
+                            front_h_r = self.check_tx_reqs.front();
                         }
                     }
 
@@ -142,14 +154,18 @@ impl Processor{
             if let Ok(bridge_msg) = get_bridge_msg {
                 match bridge_msg{
                     BridgeMsg::GetBlockReq(height) => {
+                        trace!("Processor gets GetBlockReq(height: {})!", height);
                         self.get_block_reqs.push_back(height);
+                        self.try_feed_bft(height);
                     }
 
                     BridgeMsg::CheckBlockReq(block, height) => {
+                        trace!("Processor gets CheckBlockReq(block_hash:{:?}, height:{})!", &block.crypt_hash()[0..5], height);
                         self.p2b_b.send(BridgeMsg::CheckBlockResp(self.check_block(&block, height))).unwrap();
                     }
 
                     BridgeMsg::CheckTxReq(block, height, round) => {
+                        trace!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
                         let msg = get_block_req_msg(&block, height, round);
                         self.p2r
                             .send((
@@ -161,6 +177,7 @@ impl Processor{
                     }
 
                     BridgeMsg::SignReq(hash) => {
+                        trace!("Processor gets SignReq(hash: {:?})!", &hash[0..5]);
                         self.p2b_s.send(BridgeMsg::SignResp(self.sign(&hash))).unwrap();
                     }
 
@@ -219,6 +236,7 @@ impl Processor{
     fn transmit(&self, msg: BftMsg){
         match msg{
             BftMsg::Proposal(encode) => {
+                trace!("Processor sends bft_signed_proposal{:?}", &encode.crypt_hash()[0..5]);
                 self.p2r
                     .send((
                         routing_key!(Consensus >> CompactSignedProposal).into(),
@@ -228,6 +246,7 @@ impl Processor{
             }
 
             BftMsg::Vote(encode) => {
+                trace!("Processor sends bft_signed_vote{:?}", &encode.crypt_hash()[0..5]);
                 self.p2r
                     .send((
                         routing_key!(Consensus >> RawBytes).into(),
@@ -236,12 +255,13 @@ impl Processor{
                     .unwrap();
             }
 
-            _ => warn!("transmit wrong msg type!"),
+            _ => warn!("Processor gets wrong msg type!"),
         }
     }
 
     /// A function to commit the proposal.
     fn commit(&mut self, commit: Commit){
+        trace!("Processor gets {:?}", commit);
         let height = commit.height;
         let proof = commit.proof;
         let round = proof.round;
@@ -295,6 +315,7 @@ impl Processor{
         let mut msg = Message::try_from(body).unwrap();
         let status = msg.take_rich_status().unwrap();
         let height = status.height;
+        trace!("Processor receives {:?}!", status);
 
         let pre_hash = H256::from_slice(&status.hash);
         self.pre_hash.entry(height).or_insert(pre_hash);
@@ -313,7 +334,6 @@ impl Processor{
                 vote_weight: 1,
             }
         }).collect();
-
         Status{
             height,
             interval: Some(status.interval),
@@ -321,30 +341,39 @@ impl Processor{
         }
     }
 
+    fn try_feed_bft(&mut self, height: u64) -> bool{
+        if let Some(block_txs) = self.get_block_resps.get(&height) {
+            self.p2b_f.send(BridgeMsg::GetBlockResp(self.get_block(height, block_txs))).unwrap();
+            self.get_block_reqs.pop_front();
+            return true;
+        }
+        false
+    }
+
     fn process_snapshot(&mut self, mut msg: Message) {
         if let Some(req) = msg.take_snapshot_req() {
             match req.cmd {
                 Cmd::Snapshot => {
-                    info!("receive Snapshot::Snapshot: {:?}", req);
+                    info!("Processor receives Snapshot::Snapshot: {:?}", req);
                     self.snapshot_response(Resp::SnapshotAck, true);
                 }
                 Cmd::Begin => {
-                    info!("receive Snapshot::Begin: {:?}", req);
+                    info!("Processor receives Snapshot::Begin: {:?}", req);
                     self.bft_actuator.send(BftMsg::Pause).unwrap();
                     self.snapshot_response(Resp::BeginAck, true);
 
                 }
                 Cmd::Restore => {
-                    info!("receive Snapshot::Restore: {:?}", req);
+                    info!("Processor receives Snapshot::Restore: {:?}", req);
                     self.snapshot_response(Resp::RestoreAck, true);
                 }
                 Cmd::Clear => {
-                    info!("receive Snapshot::Clear: {:?}", req);
+                    info!("Processor receives Snapshot::Clear: {:?}", req);
                     self.bft_actuator.send(BftMsg::Clear).unwrap();
                     self.snapshot_response(Resp::ClearAck, true);
                 }
                 Cmd::End => {
-                    info!("receive Snapshot::End: {:?}", req);
+                    info!("Processor receives Snapshot::End: {:?}", req);
                     self.bft_actuator.send(BftMsg::Start).unwrap();
                     self.snapshot_response(Resp::EndAck, true);
                 }
@@ -353,7 +382,7 @@ impl Processor{
     }
 
     fn snapshot_response(&self, ack: Resp, flag: bool) {
-        info!("snapshot_response ack: {:?}, flag: {}", ack, flag);
+        info!("Processor sends snapshot_response{{ack: {:?}, flag: {}}}", ack, flag);
         let mut resp = SnapshotResp::new();
         resp.set_resp(ack);
         resp.set_flag(flag);
@@ -373,6 +402,7 @@ impl Processor{
         self.get_block_resps.retain(|&hi, _| hi >= height);
         self.check_tx_resps.retain(|(hi, _), _| *hi >= height);
         self.verified_blocks.retain(|(hi, _), _| *hi >= height);
+        trace!("Processor cleans caches!");
     }
 }
 

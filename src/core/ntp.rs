@@ -42,51 +42,51 @@
 //!
 //! More details at [SNTP](https://tools.ietf.org/html/rfc4330).
 
-use ntp::errors::Error;
-use ntp::request;
-use time::now_utc;
-use time::{Duration, Timespec};
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Ntp {
-    pub enabled: bool,
-    pub threshold: i64,
-    pub address: String,
-}
-
-impl Ntp {
-    /// Check the system clock offset overflow the threshold
-    pub fn is_clock_offset_overflow(&self) -> bool {
-        match Ntp::system_clock_offset(self) {
-            Ok(offset) => {
-                if offset.num_milliseconds().abs() > self.threshold {
-                    debug!("System clock seems off by {}", offset);
-                    true
-                } else {
-                    false
-                }
-            }
-            Err(_) => true,
-        }
-    }
-
-    /// Caclulate the system clock offset relative to the ntp server
-    fn system_clock_offset(&self) -> Result<Duration, Error> {
-        match request(self.address.clone()) {
-            Ok(packet) => {
-                let dest = now_utc().to_timespec();
-                let orig = Timespec::from(packet.orig_time);
-                let recv = Timespec::from(packet.recv_time);
-                let transmit = Timespec::from(packet.transmit_time);
-
-                let offset = ((recv - orig) + (transmit - dest)) / 2;
-
-                Ok(offset)
-            }
-            Err(err) => {
-                debug!("Fetch time err: {}", err);
-                Err(err)
-            }
-        }
-    }
-}
+//use ntp::errors::Error;
+//use ntp::request;
+//use time::now_utc;
+//use time::{Duration, Timespec};
+//
+//#[derive(Debug, Deserialize, Clone)]
+//pub struct Ntp {
+//    pub enabled: bool,
+//    pub threshold: i64,
+//    pub address: String,
+//}
+//
+//impl Ntp {
+//    /// Check the system clock offset overflow the threshold
+//    pub fn is_clock_offset_overflow(&self) -> bool {
+//        match Ntp::system_clock_offset(self) {
+//            Ok(offset) => {
+//                if offset.num_milliseconds().abs() > self.threshold {
+//                    debug!("System clock seems off by {}", offset);
+//                    true
+//                } else {
+//                    false
+//                }
+//            }
+//            Err(_) => true,
+//        }
+//    }
+//
+//    /// Caclulate the system clock offset relative to the ntp server
+//    fn system_clock_offset(&self) -> Result<Duration, Error> {
+//        match request(self.address.clone()) {
+//            Ok(packet) => {
+//                let dest = now_utc().to_timespec();
+//                let orig = Timespec::from(packet.orig_time);
+//                let recv = Timespec::from(packet.recv_time);
+//                let transmit = Timespec::from(packet.transmit_time);
+//
+//                let offset = ((recv - orig) + (transmit - dest)) / 2;
+//
+//                Ok(offset)
+//            }
+//            Err(err) => {
+//                debug!("Fetch time err: {}", err);
+//                Err(err)
+//            }
+//        }
+//    }
+//}
