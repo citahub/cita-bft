@@ -104,6 +104,7 @@ impl Processor{
 
                     routing_key!(Chain >> RichStatus) => {
                         let rich_status = msg.take_rich_status().unwrap();
+                        trace!("Processor receives rich_status:{:?}!", &rich_status);
                         let status = self.extract_status(rich_status);
                         self.bft_actuator.send(BftMsg::Status(status)).unwrap();
                     }
@@ -116,7 +117,7 @@ impl Processor{
                         let mut flag = true;
                         let mut front_h = self.get_block_reqs.front();
                         while front_h.is_some() && flag {
-                            trace!("Processor try feed bft");
+                            trace!("Processor try feed bft of height {}", front_h.unwrap());
                             flag = self.try_feed_bft(*front_h.unwrap());
                             front_h = self.get_block_reqs.front();
                         }
@@ -124,9 +125,9 @@ impl Processor{
 
                     routing_key!(Auth >> VerifyBlockResp) => {
                         let resp = msg.take_verify_block_resp().unwrap();
+                        trace!("Processor receives resp:{:?}!", resp);
                         let height = resp.get_height();
                         let round = resp.get_round();
-                        trace!("Processor receives verify_block_resp{{height:{}, round:{}, is_pass:{}}}!", height, round, resp.get_pass());
                         self.check_tx_resps.entry((height, round)).or_insert(resp.clone());
                         let block = resp.get_block();
                         self.verified_blocks.entry((height, round)).or_insert(block.clone());
@@ -185,7 +186,6 @@ impl Processor{
                     }
 
                     BridgeMsg::SignReq(hash) => {
-                        trace!("Processor gets SignReq(hash: {:?})!", &hash[0..5]);
                         self.p2b_s.send(BridgeMsg::SignResp(self.sign(&hash))).unwrap();
                     }
 
@@ -316,6 +316,7 @@ impl Processor{
         block.mut_header().set_transactions_root(transactions_root.to_vec());
         block.mut_header().set_proposer(self.address.clone());
         let blk: CompactBlock = block.clone().compact();
+        trace!("Processor get block {:?}", &blk);
         return Some(blk.try_into().unwrap());
     }
 
@@ -328,7 +329,6 @@ impl Processor{
 
     fn extract_status(&mut self, status: RichStatus) -> Status{
         let height = status.height;
-        trace!("Processor receives rich_status{{height: {}, version: {}}}!", height, status.version);
 
         let pre_hash = H256::from_slice(&status.hash);
         self.pre_hash.entry(height).or_insert(pre_hash);
@@ -356,7 +356,6 @@ impl Processor{
 
     fn try_feed_bft(&mut self, height: u64) -> bool{
         if let Some(block_txs) = self.get_block_resps.get(&height) {
-            trace!("Processor send feed to Bft");
             self.p2b_f.send(BridgeMsg::GetBlockResp(self.get_block(height, block_txs))).unwrap();
             self.get_block_reqs.pop_front();
             return true;

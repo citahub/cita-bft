@@ -9,7 +9,7 @@ dotenv = "0.13.0"
 serde = "1.0"
 serde_derive = "1.0"
 bincode = "0.8.0"
-libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "add_take_compact_block" }
+libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 clap = "2"
 pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
