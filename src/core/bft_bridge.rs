@@ -25,9 +25,9 @@ use pubsub::channel::{Receiver, Sender, RecvError, select};
 use proof::BftProof;
 use bft::{BftMsg, BftSupport, Commit, Signature as BftSig, Address as BftAddr, Status, Node, Proof, BftActuator};
 use hashable::Hashable;
-use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs, BlockWithProof};
+use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs, BlockWithProof, RichStatus, CompactBlock};
 use libproto::router::{MsgType, RoutingKey, SubModules};
-use libproto::{TryFrom, TryInto, Message, auth, auth::VerifyBlockResp};
+use libproto::{TryFrom, TryInto, Message, auth, auth::VerifyBlockResp, ZERO_ORIGIN};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use std::collections::{HashMap, VecDeque};
 
@@ -88,38 +88,41 @@ impl Processor{
 
             if let Ok((key, body)) = get_rab_msg {
                 let rt_key = RoutingKey::from(&key);
+                let mut msg = Message::try_from(&body[..]).unwrap();
                 match rt_key {
                     routing_key!(Net >> CompactSignedProposal) => {
-                        trace!("Processor receives bft_signed_proposal:{:?}!", &body[0..5]);
-                        self.bft_actuator.send(BftMsg::Proposal(body)).unwrap();
+                        let encode = msg.take_raw_bytes().unwrap();
+                        trace!("Processor receives bft_signed_proposal:{:?}!", encode);
+                        self.bft_actuator.send(BftMsg::Proposal(encode)).unwrap();
                     }
 
                     routing_key!(Net >> RawBytes) => {
-                        trace!("Processor receives bft_signed_vote:{:?}!", &body[0..5]);
-                        self.bft_actuator.send(BftMsg::Vote(body)).unwrap();
+                        let encode = msg.take_raw_bytes().unwrap();
+                        trace!("Processor receives bft_signed_vote:{:?}!", encode);
+                        self.bft_actuator.send(BftMsg::Vote(encode)).unwrap();
                     }
 
                     routing_key!(Chain >> RichStatus) => {
-                        let status = self.extract_status(&body[..]);
+                        let rich_status = msg.take_rich_status().unwrap();
+                        let status = self.extract_status(rich_status);
                         self.bft_actuator.send(BftMsg::Status(status)).unwrap();
                     }
 
                     routing_key!(Auth >> BlockTxs) => {
-                        let mut msg = Message::try_from(&body[..]).unwrap();
                         let block_txs = msg.take_block_txs().unwrap();
-                        trace!("Processor receives block_txs{{height:{}}}!", block_txs.get_height());
-                        self.get_block_resps.entry(block_txs.get_height()).or_insert(block_txs);
+                        trace!("Processor receives block_txs:{:?}!", block_txs);
+                        self.get_block_resps.entry(block_txs.get_height() + 1).or_insert(block_txs);
 
                         let mut flag = true;
                         let mut front_h = self.get_block_reqs.front();
                         while front_h.is_some() && flag {
+                            trace!("Processor try feed bft");
                             flag = self.try_feed_bft(*front_h.unwrap());
                             front_h = self.get_block_reqs.front();
                         }
                     }
 
                     routing_key!(Auth >> VerifyBlockResp) => {
-                        let mut msg = Message::try_from(&body[..]).unwrap();
                         let resp = msg.take_verify_block_resp().unwrap();
                         let height = resp.get_height();
                         let round = resp.get_round();
@@ -143,7 +146,6 @@ impl Processor{
                     }
 
                     routing_key!(Snapshot >> SnapshotReq) => {
-                        let msg = Message::try_from(&body[..]).unwrap();
                         self.process_snapshot(msg);
                     }
 
@@ -166,14 +168,20 @@ impl Processor{
 
                     BridgeMsg::CheckTxReq(block, height, round) => {
                         trace!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
-                        let msg = get_block_req_msg(&block, height, round);
-                        self.p2r
-                            .send((
-                                routing_key!(Consensus >> VerifyBlockReq).into(),
-                                msg.clone().try_into().unwrap(),
-                            ))
-                            .unwrap();
-                        self.check_tx_reqs.push_back((height, round));
+                        let compact_block = CompactBlock::try_from(&block).unwrap();
+                        let tx_hashes = compact_block.get_body().transaction_hashes();
+                        if tx_hashes.is_empty() {
+                            self.p2b_t.send(BridgeMsg::CheckTxResp(true)).unwrap();
+                        } else {
+                            let msg = get_block_req_msg(compact_block, height, round);
+                            self.p2r
+                                .send((
+                                    routing_key!(Consensus >> VerifyBlockReq).into(),
+                                    msg.clone().try_into().unwrap(),
+                                ))
+                                .unwrap();
+                            self.check_tx_reqs.push_back((height, round));
+                        }
                     }
 
                     BridgeMsg::SignReq(hash) => {
@@ -236,21 +244,23 @@ impl Processor{
     fn transmit(&self, msg: BftMsg){
         match msg{
             BftMsg::Proposal(encode) => {
-                trace!("Processor sends bft_signed_proposal{:?}", &encode.crypt_hash()[0..5]);
+                trace!("Processor sends bft_signed_proposal{:?}", encode);
+                let msg: Message = encode.into();
                 self.p2r
                     .send((
                         routing_key!(Consensus >> CompactSignedProposal).into(),
-                        encode,
+                        msg.try_into().unwrap(),
                     ))
                     .unwrap();
             }
 
             BftMsg::Vote(encode) => {
-                trace!("Processor sends bft_signed_vote{:?}", &encode.crypt_hash()[0..5]);
+                trace!("Processor sends bft_signed_vote{:?}", encode);
+                let msg: Message = encode.into();
                 self.p2r
                     .send((
                         routing_key!(Consensus >> RawBytes).into(),
-                        encode,
+                        msg.try_into().unwrap(),
                     ))
                     .unwrap();
             }
@@ -284,8 +294,13 @@ impl Processor{
     fn get_block (&self, height: u64, block_txs: &BlockTxs) -> Option<Vec<u8>>{
         let version = self.version.get(&(height - 1));
         let pre_hash = self.pre_hash.get(&(height - 1));
-        let proof = self.proof.get(&(height - 1));
+        let mut proof = self.proof.get(&(height - 1));
+        let default_proof = Proof::default();
+        if height == 1{
+            proof = Some(&default_proof);
+        }
         if version.is_none() || pre_hash.is_none() || proof.is_none(){
+            trace!("version: {:?}, pre_hash: {:?}, proof: {:?}", version, pre_hash, proof);
             return None;
         }
         let mut block = Block::new();
@@ -300,8 +315,8 @@ impl Processor{
         let transactions_root = block.get_body().transactions_root();
         block.mut_header().set_transactions_root(transactions_root.to_vec());
         block.mut_header().set_proposer(self.address.clone());
-        let blk = block.clone().compact().try_into().unwrap();
-        return Some(blk);
+        let blk: CompactBlock = block.clone().compact();
+        return Some(blk.try_into().unwrap());
     }
 
     fn sign(&self, hash: &[u8]) -> Option<BftSig>{
@@ -311,11 +326,9 @@ impl Processor{
         None
     }
 
-    fn extract_status(&mut self, body: &[u8]) -> Status{
-        let mut msg = Message::try_from(body).unwrap();
-        let status = msg.take_rich_status().unwrap();
+    fn extract_status(&mut self, status: RichStatus) -> Status{
         let height = status.height;
-        trace!("Processor receives {:?}!", status);
+        trace!("Processor receives rich_status{{height: {}, version: {}}}!", height, status.version);
 
         let pre_hash = H256::from_slice(&status.hash);
         self.pre_hash.entry(height).or_insert(pre_hash);
@@ -343,6 +356,7 @@ impl Processor{
 
     fn try_feed_bft(&mut self, height: u64) -> bool{
         if let Some(block_txs) = self.get_block_resps.get(&height) {
+            trace!("Processor send feed to Bft");
             self.p2b_f.send(BridgeMsg::GetBlockResp(self.get_block(height, block_txs))).unwrap();
             self.get_block_reqs.pop_front();
             return true;
@@ -459,6 +473,7 @@ impl BftSupport for BftBridge {
     fn get_block(&self, height: u64) -> Option<Vec<u8>>{
         self.b2p.send(BridgeMsg::GetBlockReq(height)).unwrap();
         if let BridgeMsg::GetBlockResp(block) = self.b4p_f.recv().unwrap(){
+            trace!("get block: {:?}", block);
             return block;
         }
         None
@@ -507,16 +522,13 @@ fn to_bft_proof(proof: &Proof) -> ProtoProof {
     proof
 }
 
-fn get_block_req_msg (block: &[u8], height: u64, round: u64) -> Message{
-    let mut msg = Message::try_from(block).unwrap();
-    let origin = msg.get_origin();
-    let compact_block = msg.take_compact_block().unwrap();
+fn get_block_req_msg (compact_block: CompactBlock, height: u64, round: u64) -> Message{
     let mut verify_req = auth::VerifyBlockReq::new();
     verify_req.set_height(height);
     verify_req.set_round(round);
     verify_req.set_block(compact_block);
     let mut msg: Message = verify_req.into();
-    msg.set_origin(origin);
+    msg.set_origin(ZERO_ORIGIN);
     msg
 }
 
@@ -524,8 +536,9 @@ fn get_block_req_msg (block: &[u8], height: u64, round: u64) -> Message{
 #[cfg(test)]
 mod test {
     use super::*;
-    use bft::{Status, Node};
+    use bft::Node;
     use std::collections::HashMap;
+    use libproto::blockchain::CompactBlock;
 
     #[test]
     fn test_extract_status() {
@@ -548,5 +561,16 @@ mod test {
         }).collect();
 
         println!("{:?}", authority_list);
+    }
+
+    #[test]
+    fn test_compact_block() {
+        let blk: CompactBlock = CompactBlock::new();
+        println!("blk:{:?}", blk);
+        let encode = blk.clone().try_into().unwrap();
+        println!("encode:{:?}", encode);
+        let compact_block = CompactBlock::try_from(&encode).unwrap();
+        println!("compact_block:{:?}", compact_block);
+        assert_eq!(blk, compact_block);
     }
 }
