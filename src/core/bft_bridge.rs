@@ -27,18 +27,21 @@ use bft::{BftMsg, BftSupport, Commit, Signature as BftSig, Address as BftAddr, S
 use hashable::Hashable;
 use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs, BlockWithProof, RichStatus, CompactBlock};
 use libproto::router::{MsgType, RoutingKey, SubModules};
-use libproto::{TryFrom, TryInto, Message, auth, auth::VerifyBlockResp, ZERO_ORIGIN};
+use libproto::{TryFrom, TryInto, Message, auth, auth::VerifyBlockResp, Origin, ZERO_ORIGIN};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
+use lru_cache::LruCache;
 use std::collections::{HashMap, VecDeque};
 
 use engine::{unix_now, AsMillis};
+
+pub const ORIGIN_N: usize = 100;
 
 pub type PubType = (String, Vec<u8>);
 
 pub enum BridgeMsg{
     CheckBlockReq(Vec<u8>, u64),
     CheckBlockResp(bool),
-    CheckTxReq(Vec<u8>, u64, u64),
+    CheckTxReq(Vec<u8>, Vec<u8>, u64, u64),
     CheckTxResp(bool),
     Transmit(BftMsg),
     Commit(Commit),
@@ -71,6 +74,8 @@ pub struct Processor {
     get_block_resps: HashMap<u64, BlockTxs>,
     check_tx_resps: HashMap<(u64, u64), VerifyBlockResp>,
     verified_blocks: HashMap<(u64, u64), Block>,
+
+    origins: LruCache<Vec<u8>, Origin>,
 }
 
 
@@ -92,6 +97,9 @@ impl Processor{
                 match rt_key {
                     routing_key!(Net >> CompactSignedProposal) => {
                         let encode = msg.take_raw_bytes().unwrap();
+                        let signed_proposal_hash = encode.crypt_hash().to_vec();
+                        let origin = msg.get_origin();
+                        self.origins.insert(signed_proposal_hash, origin);
                         trace!("Processor receives bft_signed_proposal:{:?}!", encode);
                         self.bft_actuator.send(BftMsg::Proposal(encode)).unwrap();
                     }
@@ -168,7 +176,7 @@ impl Processor{
                         self.p2b_b.send(BridgeMsg::CheckBlockResp(self.check_block(&block, height))).unwrap();
                     }
 
-                    BridgeMsg::CheckTxReq(block, height, round) => {
+                    BridgeMsg::CheckTxReq(block, signed_proposal_hash, height, round) => {
                         trace!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
                         let compact_block = CompactBlock::try_from(&block).unwrap();
                         let tx_hashes = compact_block.get_body().transaction_hashes();
@@ -177,7 +185,7 @@ impl Processor{
                             self.verified_blocks.entry((height, round)).or_insert(blk);
                             self.p2b_t.send(BridgeMsg::CheckTxResp(true)).unwrap();
                         } else {
-                            let msg = get_block_req_msg(compact_block, height, round);
+                            let msg = self.get_block_req_msg(compact_block, &signed_proposal_hash, height, round);
                             self.p2r
                                 .send((
                                     routing_key!(Consensus >> VerifyBlockReq).into(),
@@ -236,9 +244,11 @@ impl Processor{
             get_block_resps: HashMap::new(),
             check_tx_resps: HashMap::new(),
             verified_blocks: HashMap::new(),
+            origins: LruCache::new(ORIGIN_N),
         }
     }
 
+    // TODO: check pre_hash and headers
     fn check_block(&self, _block: &[u8], _height: u64) -> bool{
         true
     }
@@ -326,9 +336,7 @@ impl Processor{
     }
 
     fn sign(&self, hash: &[u8]) -> Option<BftSig>{
-        trace!("Processor sign hash {:?}", hash);
         if let Ok(signature) = Signature::sign(&self.signer.signer, &H256::from(hash)){
-            trace!("Processor return signature {:?}", (&signature.0).to_vec());
             return Some((&signature.0).to_vec());
         }
         None
@@ -359,6 +367,20 @@ impl Processor{
             interval: Some(status.interval),
             authority_list,
         }
+    }
+
+    fn get_block_req_msg (&mut self, compact_block: CompactBlock, signed_proposal_hash: &[u8], height: u64, round: u64) -> Message{
+        let mut verify_req = auth::VerifyBlockReq::new();
+        verify_req.set_height(height);
+        verify_req.set_round(round);
+        verify_req.set_block(compact_block);
+        let mut msg: Message = verify_req.into();
+        if let Some(origin) = self.origins.get_mut(signed_proposal_hash) {
+            msg.set_origin(*origin);
+        } else {
+            msg.set_origin(ZERO_ORIGIN);
+        }
+        msg
     }
 
     fn try_feed_bft(&mut self, height: u64) -> bool{
@@ -422,7 +444,6 @@ impl Processor{
         self.get_block_resps.retain(|&hi, _| hi >= height);
         self.check_tx_resps.retain(|(hi, _), _| *hi >= height);
         self.verified_blocks.retain(|(hi, _), _| *hi >= height);
-        trace!("Processor cleans caches!");
     }
 }
 
@@ -460,8 +481,8 @@ impl BftSupport for BftBridge {
         false
     }
     /// A function to check signature.
-    fn check_transaction(&self, block: &[u8], height: u64, round: u64) -> bool{
-        self.b2p.send(BridgeMsg::CheckTxReq(block.to_vec(), height, round)).unwrap();
+    fn check_txs(&self, block: &[u8], signed_proposal_hash: &[u8], height: u64, round: u64) -> bool{
+        self.b2p.send(BridgeMsg::CheckTxReq(block.to_vec(), signed_proposal_hash.to_vec(), height, round)).unwrap();
         if let BridgeMsg::CheckTxResp(is_pass) = self.b4p_t.recv().unwrap(){
             return is_pass;
         }
@@ -479,7 +500,6 @@ impl BftSupport for BftBridge {
     fn get_block(&self, height: u64) -> Option<Vec<u8>>{
         self.b2p.send(BridgeMsg::GetBlockReq(height)).unwrap();
         if let BridgeMsg::GetBlockResp(block) = self.b4p_f.recv().unwrap(){
-            trace!("get block: {:?}", block);
             return block;
         }
         None
@@ -494,21 +514,18 @@ impl BftSupport for BftBridge {
     }
 
     fn check_sig(&self, signature: &[u8], hash: &[u8]) -> Option<BftAddr>{
-        info!("Processor check sig with signature {:?} and hash {:?}", signature, hash);
         if signature.len() != SIGNATURE_BYTES_LEN {
             return None;
         }
         let signature = Signature::from(signature);
         if let Ok(pubkey) = signature.recover(&H256::from(hash)) {
             let address = pubkey_to_address(&pubkey);
-            info!("Processor check sig return address {:?} with pubkey {:?}", address.to_vec(), pubkey);
             return Some(address.to_vec());
         }
         None
     }
 
     fn crypt_hash(&self, msg: &[u8]) -> Vec<u8>{
-        info!("Processor calculate hash of msg {:?} and get hash {:?}", msg, msg.to_vec().crypt_hash().to_vec());
         msg.to_vec().crypt_hash().to_vec()
     }
 }
@@ -529,16 +546,6 @@ fn to_bft_proof(proof: &Proof) -> ProtoProof {
     proof.set_content(encoded_proof);
     proof.set_field_type(ProofType::Bft);
     proof
-}
-
-fn get_block_req_msg (compact_block: CompactBlock, height: u64, round: u64) -> Message{
-    let mut verify_req = auth::VerifyBlockReq::new();
-    verify_req.set_height(height);
-    verify_req.set_round(round);
-    verify_req.set_block(compact_block);
-    let mut msg: Message = verify_req.into();
-    msg.set_origin(ZERO_ORIGIN);
-    msg
 }
 
 
