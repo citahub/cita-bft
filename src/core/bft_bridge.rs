@@ -142,6 +142,7 @@ impl Processor{
                             } else {
                                 flag = false;
                             }
+
                             front_h_r = self.check_tx_reqs.front();
                         }
                     }
@@ -172,6 +173,8 @@ impl Processor{
                         let compact_block = CompactBlock::try_from(&block).unwrap();
                         let tx_hashes = compact_block.get_body().transaction_hashes();
                         if tx_hashes.is_empty() {
+                            let blk = compact_block.complete(vec![]);
+                            self.verified_blocks.entry((height, round)).or_insert(blk);
                             self.p2b_t.send(BridgeMsg::CheckTxResp(true)).unwrap();
                         } else {
                             let msg = get_block_req_msg(compact_block, height, round);
@@ -275,19 +278,21 @@ impl Processor{
         let height = commit.height;
         let proof = commit.proof;
         let round = proof.round;
-        let block = self.verified_blocks.get(&(height, round)).unwrap();
-        self.proof.entry(height).or_insert(proof.clone());
-        let proof = to_bft_proof(&proof);
-        let mut block_with_proof = BlockWithProof::new();
-        block_with_proof.set_blk(block.clone());
-        block_with_proof.set_proof(proof.into());
-        let msg: Message = block_with_proof.clone().into();
-        self.p2r
-            .send((
-                routing_key!(Consensus >> BlockWithProof).into(),
-                msg.try_into().unwrap(),
-            ))
-            .unwrap();
+        // if do not receive relative block, wait for sync.
+        if let Some(block) = self.verified_blocks.get(&(height, round)){
+            self.proof.entry(height).or_insert(proof.clone());
+            let proof = to_bft_proof(&proof);
+            let mut block_with_proof = BlockWithProof::new();
+            block_with_proof.set_blk(block.clone());
+            block_with_proof.set_proof(proof.into());
+            let msg: Message = block_with_proof.clone().into();
+            self.p2r
+                .send((
+                    routing_key!(Consensus >> BlockWithProof).into(),
+                    msg.try_into().unwrap(),
+                ))
+                .unwrap();
+        }
         self.clean_cache(height - 1);
     }
 
@@ -321,7 +326,9 @@ impl Processor{
     }
 
     fn sign(&self, hash: &[u8]) -> Option<BftSig>{
+        trace!("Processor sign hash {:?}", hash);
         if let Ok(signature) = Signature::sign(&self.signer.signer, &H256::from(hash)){
+            trace!("Processor return signature {:?}", (&signature.0).to_vec());
             return Some((&signature.0).to_vec());
         }
         None
@@ -487,18 +494,21 @@ impl BftSupport for BftBridge {
     }
 
     fn check_sig(&self, signature: &[u8], hash: &[u8]) -> Option<BftAddr>{
+        info!("Processor check sig with signature {:?} and hash {:?}", signature, hash);
         if signature.len() != SIGNATURE_BYTES_LEN {
             return None;
         }
         let signature = Signature::from(signature);
         if let Ok(pubkey) = signature.recover(&H256::from(hash)) {
             let address = pubkey_to_address(&pubkey);
+            info!("Processor check sig return address {:?} with pubkey {:?}", address.to_vec(), pubkey);
             return Some(address.to_vec());
         }
         None
     }
 
     fn crypt_hash(&self, msg: &[u8]) -> Vec<u8>{
+        info!("Processor calculate hash of msg {:?} and get hash {:?}", msg, msg.to_vec().crypt_hash().to_vec());
         msg.to_vec().crypt_hash().to_vec()
     }
 }
@@ -538,6 +548,7 @@ mod test {
     use bft::Node;
     use std::collections::HashMap;
     use libproto::blockchain::CompactBlock;
+    use crypto::{pubkey_to_address, Signature, Sign, SIGNATURE_BYTES_LEN, Signer, KeyPair, PrivKey, CreateKey};
 
     #[test]
     fn test_extract_status() {
@@ -571,5 +582,48 @@ mod test {
         let compact_block = CompactBlock::try_from(&encode).unwrap();
         println!("compact_block:{:?}", compact_block);
         assert_eq!(blk, compact_block);
+    }
+
+    #[test]
+    fn test_sig() {
+        let key_pair = KeyPair::gen_keypair();
+        let priv_key = key_pair.privkey().clone();
+        let address_1 = key_pair.address().to_vec();
+        println!("address_1: {:?}", address_1);
+        let signer = Signer::from(*key_pair.privkey());
+        let address_2 = signer.address.to_vec();
+        println!("address_2: {:?}", address_2);
+        let msg = vec![12u8, 18u8, 20u8, 34u8];
+        let hash_1 = crypt_hash(&msg);
+        println!("hash_1: {:?}", hash_1);
+        let hash_2 = crypt_hash(&msg);
+        println!("hash_2: {:?}", hash_2);
+        let signature = sign(&priv_key, &hash_1).unwrap();
+        println!("signature: {:?}", signature);
+        let address_3 = check_sig(&signature, &hash_2).unwrap();
+        println!("address_3: {:?}", address_3);
+    }
+
+    fn check_sig(signature: &[u8], hash: &[u8]) -> Option<BftAddr>{
+        if signature.len() != SIGNATURE_BYTES_LEN {
+            return None;
+        }
+        let signature = Signature::from(signature);
+        if let Ok(pubkey) = signature.recover(&H256::from(hash)) {
+            let address = pubkey_to_address(&pubkey);
+            return Some(address.to_vec());
+        }
+        None
+    }
+
+    fn crypt_hash(msg: &[u8]) -> Vec<u8>{
+        msg.to_vec().crypt_hash().to_vec()
+    }
+
+    fn sign(privkey: &PrivKey, hash: &[u8]) -> Option<BftSig>{
+        if let Ok(signature) = Signature::sign(&privkey, &H256::from(hash)){
+            return Some((&signature.0).to_vec());
+        }
+        None
     }
 }
