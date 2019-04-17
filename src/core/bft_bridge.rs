@@ -46,9 +46,9 @@ pub enum BridgeMsg{
     Transmit(BftMsg),
     Commit(Commit),
     GetBlockReq(u64),
-    GetBlockResp(Option<Vec<u8>>),
+    GetBlockResp(Result<Vec<u8>, BridgeError>),
     SignReq(Vec<u8>),
-    SignResp(Option<BftSig>),
+    SignResp(Result<BftSig, BridgeError>),
 }
 
 pub struct Processor {
@@ -289,6 +289,7 @@ impl Processor{
         let proof = commit.proof;
         let round = proof.round;
         // if do not receive relative block, wait for sync.
+        info!("Processor get verified_block {:?}", self.verified_blocks.get(&(height, round)));
         if let Some(block) = self.verified_blocks.get(&(height, round)){
             self.proof.entry(height).or_insert(proof.clone());
             let proof = to_bft_proof(&proof);
@@ -306,7 +307,7 @@ impl Processor{
         self.clean_cache(height - 1);
     }
 
-    fn get_block (&self, height: u64, block_txs: &BlockTxs) -> Option<Vec<u8>>{
+    fn get_block (&self, height: u64, block_txs: &BlockTxs) -> Result<Vec<u8>, BridgeError>{
         let version = self.version.get(&(height - 1));
         let pre_hash = self.pre_hash.get(&(height - 1));
         let mut proof = self.proof.get(&(height - 1));
@@ -316,7 +317,7 @@ impl Processor{
         }
         if version.is_none() || pre_hash.is_none() || proof.is_none(){
             trace!("version: {:?}, pre_hash: {:?}, proof: {:?}", version, pre_hash, proof);
-            return None;
+            return Err(BridgeError::GetBlockFailed);
         }
         let mut block = Block::new();
         block.set_version(*version.unwrap());
@@ -332,14 +333,14 @@ impl Processor{
         block.mut_header().set_proposer(self.address.clone());
         let blk: CompactBlock = block.clone().compact();
         trace!("Processor get block {:?}", &blk);
-        return Some(blk.try_into().unwrap());
+        Ok(blk.try_into().unwrap())
     }
 
-    fn sign(&self, hash: &[u8]) -> Option<BftSig>{
+    fn sign(&self, hash: &[u8]) -> Result<BftSig, BridgeError>{
         if let Ok(signature) = Signature::sign(&self.signer.signer, &H256::from(hash)){
-            return Some((&signature.0).to_vec());
+            return Ok((&signature.0).to_vec());
         }
-        None
+        Err(BridgeError::SignFailed)
     }
 
     fn extract_status(&mut self, status: RichStatus) -> Status{
@@ -473,56 +474,60 @@ impl BftBridge {
 }
 
 impl BftSupport for BftBridge {
-    fn check_block(&self, block: &[u8], height: u64) -> bool{
+    type Error = BridgeError;
+    fn check_block(&self, block: &[u8], height: u64) -> Result<bool, BridgeError>{
         self.b2p.send(BridgeMsg::CheckBlockReq(block.to_vec(), height)).unwrap();
         if let BridgeMsg::CheckBlockResp(is_pass) = self.b4p_b.recv().unwrap(){
-            return is_pass;
+            return Ok(is_pass);
         }
-        false
+        Err(BridgeError::CheckBlockFailed)
     }
     /// A function to check signature.
-    fn check_txs(&self, block: &[u8], signed_proposal_hash: &[u8], height: u64, round: u64) -> bool{
+    fn check_txs(&self, block: &[u8], signed_proposal_hash: &[u8], height: u64, round: u64) -> Result<bool, BridgeError>{
         self.b2p.send(BridgeMsg::CheckTxReq(block.to_vec(), signed_proposal_hash.to_vec(), height, round)).unwrap();
         if let BridgeMsg::CheckTxResp(is_pass) = self.b4p_t.recv().unwrap(){
-            return is_pass;
+            return Ok(is_pass);
         }
-        false
+        Err(BridgeError::CheckTxsFailed)
     }
     /// A funciton to transmit messages.
     fn transmit(&self, msg: BftMsg){
         self.b2p.send(BridgeMsg::Transmit(msg)).unwrap();
     }
     /// A function to commit the proposal.
-    fn commit(&self, commit: Commit){
-        self.b2p.send(BridgeMsg::Commit(commit)).unwrap();
+    fn commit(&self, commit: Commit) -> Result<(), BridgeError>{
+        if let Err(_) = self.b2p.send(BridgeMsg::Commit(commit)){
+            return Err(BridgeError::CommitFailed);
+        }
+        Ok(())
     }
 
-    fn get_block(&self, height: u64) -> Option<Vec<u8>>{
+    fn get_block(&self, height: u64) -> Result<Vec<u8>, BridgeError>{
         self.b2p.send(BridgeMsg::GetBlockReq(height)).unwrap();
         if let BridgeMsg::GetBlockResp(block) = self.b4p_f.recv().unwrap(){
             return block;
         }
-        None
+        Err(BridgeError::GetBlockFailed)
     }
 
-    fn sign(&self, hash: &[u8]) -> Option<BftSig>{
+    fn sign(&self, hash: &[u8]) -> Result<BftSig, BridgeError>{
         self.b2p.send(BridgeMsg::SignReq(hash.to_vec())).unwrap();
         if let BridgeMsg::SignResp(sign) = self.b4p_s.recv().unwrap(){
             return sign;
         }
-        None
+        Err(BridgeError::SignFailed)
     }
 
-    fn check_sig(&self, signature: &[u8], hash: &[u8]) -> Option<BftAddr>{
+    fn check_sig(&self, signature: &[u8], hash: &[u8]) -> Result<BftAddr, BridgeError>{
         if signature.len() != SIGNATURE_BYTES_LEN {
-            return None;
+            return Err(BridgeError::CheckSigFailed);
         }
         let signature = Signature::from(signature);
         if let Ok(pubkey) = signature.recover(&H256::from(hash)) {
             let address = pubkey_to_address(&pubkey);
-            return Some(address.to_vec());
+            return Ok(address.to_vec());
         }
-        None
+        Err(BridgeError::CheckSigFailed)
     }
 
     fn crypt_hash(&self, msg: &[u8]) -> Vec<u8>{
@@ -546,6 +551,16 @@ fn to_bft_proof(proof: &Proof) -> ProtoProof {
     proof.set_content(encoded_proof);
     proof.set_field_type(ProofType::Bft);
     proof
+}
+
+#[derive(Clone, Debug)]
+pub enum BridgeError {
+    CheckBlockFailed,
+    CheckTxsFailed,
+    CommitFailed,
+    GetBlockFailed,
+    SignFailed,
+    CheckSigFailed,
 }
 
 
