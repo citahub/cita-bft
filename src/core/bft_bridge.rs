@@ -25,7 +25,7 @@ use pubsub::channel::{Receiver, Sender, RecvError, select};
 use proof::BftProof;
 use bft::{BftMsg, BftSupport, Commit, Signature as BftSig, Address as BftAddr, Status, Node, Proof, BftActuator};
 use hashable::Hashable;
-use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs, BlockWithProof, RichStatus, CompactBlock};
+use libproto::blockchain::{Block, Proof as ProtoProof, ProofType, BlockTxs, BlockWithProof, RichStatus, CompactBlock, SignedTransaction};
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::{TryFrom, TryInto, Message, auth, auth::VerifyBlockResp, Origin, ZERO_ORIGIN};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
@@ -73,7 +73,7 @@ pub struct Processor {
 
     get_block_resps: HashMap<u64, BlockTxs>,
     check_tx_resps: HashMap<(u64, u64), VerifyBlockResp>,
-    verified_blocks: HashMap<(u64, u64), Block>,
+    verified_txs: HashMap<u64, HashMap<H256, SignedTransaction>>,
 
     origins: LruCache<Vec<u8>, Origin>,
 }
@@ -138,7 +138,7 @@ impl Processor{
                         let round = resp.get_round();
                         self.check_tx_resps.entry((height, round)).or_insert(resp.clone());
                         let block = resp.get_block();
-                        self.verified_blocks.entry((height, round)).or_insert(block.clone());
+                        self.insert_verified_txs(height, block);
 
                         let mut flag = true;
                         let mut front_h_r = self.check_tx_reqs.front();
@@ -180,9 +180,8 @@ impl Processor{
                         trace!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
                         let compact_block = CompactBlock::try_from(&block).unwrap();
                         let tx_hashes = compact_block.get_body().transaction_hashes();
+
                         if tx_hashes.is_empty() {
-                            let blk = compact_block.complete(vec![]);
-                            self.verified_blocks.entry((height, round)).or_insert(blk);
                             self.p2b_t.send(BridgeMsg::CheckTxResp(true)).unwrap();
                         } else {
                             let msg = self.get_block_req_msg(compact_block, &signed_proposal_hash, height, round);
@@ -243,7 +242,7 @@ impl Processor{
             check_tx_reqs: VecDeque::new(),
             get_block_resps: HashMap::new(),
             check_tx_resps: HashMap::new(),
-            verified_blocks: HashMap::new(),
+            verified_txs: HashMap::new(),
             origins: LruCache::new(ORIGIN_N),
         }
     }
@@ -287,23 +286,19 @@ impl Processor{
         trace!("Processor gets {:?}", commit);
         let height = commit.height;
         let proof = commit.proof;
-        let round = proof.round;
-        // if do not receive relative block, wait for sync.
-        info!("Processor get verified_block {:?}", self.verified_blocks.get(&(height, round)));
-        if let Some(block) = self.verified_blocks.get(&(height, round)){
-            self.proof.entry(height).or_insert(proof.clone());
-            let proof = to_bft_proof(&proof);
-            let mut block_with_proof = BlockWithProof::new();
-            block_with_proof.set_blk(block.clone());
-            block_with_proof.set_proof(proof.into());
-            let msg: Message = block_with_proof.clone().into();
-            self.p2r
-                .send((
-                    routing_key!(Consensus >> BlockWithProof).into(),
-                    msg.try_into().unwrap(),
-                ))
-                .unwrap();
-        }
+        self.proof.entry(height).or_insert(proof.clone());
+        let proof = to_bft_proof(&proof);
+        let block = self.complete_block(height, commit.block);
+        let mut block_with_proof = BlockWithProof::new();
+        block_with_proof.set_blk(block);
+        block_with_proof.set_proof(proof.into());
+        let msg: Message = block_with_proof.clone().into();
+        self.p2r
+            .send((
+                routing_key!(Consensus >> BlockWithProof).into(),
+                msg.try_into().unwrap(),
+            ))
+            .unwrap();
         self.clean_cache(height - 1);
     }
 
@@ -444,7 +439,35 @@ impl Processor{
         self.version.retain(|&hi, _| hi >= height);
         self.get_block_resps.retain(|&hi, _| hi >= height);
         self.check_tx_resps.retain(|(hi, _), _| *hi >= height);
-        self.verified_blocks.retain(|(hi, _), _| *hi >= height);
+        self.verified_txs.retain(|hi, _| *hi >= height);
+    }
+
+    fn insert_verified_txs (&mut self, height: u64, block: &Block) {
+        let txs = block.get_body().get_transactions();
+        if let Some(map) = self.verified_txs.get_mut(&height) {
+            for tx in txs {
+                let tx_hash = tx.crypt_hash();
+                map.entry(tx_hash).or_insert(tx.to_owned());
+            }
+        } else {
+            let mut map = HashMap::new();
+            for tx in txs {
+                let tx_hash = tx.crypt_hash();
+                map.insert(tx_hash, tx.to_owned());
+            }
+            self.verified_txs.insert(height, map);
+        }
+    }
+
+    fn complete_block (&mut self, height: u64, block: Vec<u8>) -> Block{
+        let compact_block = CompactBlock::try_from(&block).unwrap();
+        let tx_hashes = compact_block.get_body().transaction_hashes();
+        if tx_hashes.is_empty() {
+            return compact_block.complete(vec![]);
+        }
+        let map = self.verified_txs.get(&height).unwrap();
+        let signed_txs: Vec<SignedTransaction> = tx_hashes.iter().map(|tx_hash| map.get(tx_hash).unwrap().to_owned()).collect();
+        compact_block.complete(signed_txs)
     }
 }
 
