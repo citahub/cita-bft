@@ -119,13 +119,13 @@ impl Processor{
 
                     routing_key!(Auth >> BlockTxs) => {
                         let block_txs = msg.take_block_txs().unwrap();
-                        trace!("Processor receives block_txs:{:?}!", block_txs);
+                        info!("Processor receives block_txs:{:?}!", block_txs);
                         self.get_block_resps.entry(block_txs.get_height() + 1).or_insert(block_txs);
 
                         let mut flag = true;
                         let mut front_h = self.get_block_reqs.front();
                         while front_h.is_some() && flag {
-                            trace!("Processor try feed bft of height {}", front_h.unwrap());
+                            info!("Processor try feed bft of height {}", front_h.unwrap());
                             flag = self.try_feed_bft(*front_h.unwrap());
                             front_h = self.get_block_reqs.front();
                         }
@@ -166,7 +166,7 @@ impl Processor{
             if let Ok(bridge_msg) = get_bridge_msg {
                 match bridge_msg{
                     BridgeMsg::GetBlockReq(height) => {
-                        trace!("Processor gets GetBlockReq(height: {})!", height);
+                        info!("Processor gets GetBlockReq(height: {})!", height);
                         self.get_block_reqs.push_back(height);
                         self.try_feed_bft(height);
                     }
@@ -498,18 +498,26 @@ impl BftBridge {
 
 impl BftSupport for BftBridge {
     type Error = BridgeError;
-    fn check_block(&self, block: &[u8], height: u64) -> Result<bool, BridgeError>{
+    fn check_block(&self, block: &[u8], height: u64) -> Result<(), BridgeError>{
         self.b2p.send(BridgeMsg::CheckBlockReq(block.to_vec(), height)).unwrap();
         if let BridgeMsg::CheckBlockResp(is_pass) = self.b4p_b.recv().unwrap(){
-            return Ok(is_pass);
+            if is_pass {
+                return Ok(());
+            } else {
+                return Err(BridgeError::CheckBlockFailed);
+            }
         }
         Err(BridgeError::CheckBlockFailed)
     }
     /// A function to check signature.
-    fn check_txs(&self, block: &[u8], signed_proposal_hash: &[u8], height: u64, round: u64) -> Result<bool, BridgeError>{
+    fn check_txs(&self, block: &[u8], signed_proposal_hash: &[u8], height: u64, round: u64) -> Result<(), BridgeError>{
         self.b2p.send(BridgeMsg::CheckTxReq(block.to_vec(), signed_proposal_hash.to_vec(), height, round)).unwrap();
         if let BridgeMsg::CheckTxResp(is_pass) = self.b4p_t.recv().unwrap(){
-            return Ok(is_pass);
+            if is_pass {
+                return Ok(());
+            } else {
+                return Err(BridgeError::CheckTxsFailed);
+            }
         }
         Err(BridgeError::CheckTxsFailed)
     }
@@ -518,11 +526,11 @@ impl BftSupport for BftBridge {
         self.b2p.send(BridgeMsg::Transmit(msg)).unwrap();
     }
     /// A function to commit the proposal.
-    fn commit(&self, commit: Commit) -> Result<(), BridgeError>{
+    fn commit(&self, commit: Commit) -> Result<Status, BridgeError>{
         if let Err(_) = self.b2p.send(BridgeMsg::Commit(commit)){
             return Err(BridgeError::CommitFailed);
         }
-        Ok(())
+        Ok(Status::default())
     }
 
     fn get_block(&self, height: u64) -> Result<Vec<u8>, BridgeError>{
