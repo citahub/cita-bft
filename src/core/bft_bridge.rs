@@ -287,7 +287,7 @@ impl Processor{
         let height = commit.height;
         let proof = commit.proof;
         self.proof.entry(height).or_insert(proof.clone());
-        let proof = to_bft_proof(&proof);
+        let proof = to_cita_proof(&proof);
         let block = self.complete_block(height, commit.block);
         let mut block_with_proof = BlockWithProof::new();
         block_with_proof.set_blk(block);
@@ -318,7 +318,7 @@ impl Processor{
         block.set_version(*version.unwrap());
         block.set_body(block_txs.clone().take_body());
         block.mut_header().set_prevhash(pre_hash.unwrap().0.to_vec());
-        let bft_proof = to_bft_proof(proof.unwrap());
+        let bft_proof = to_cita_proof(proof.unwrap());
         block.mut_header().set_proof(bft_proof);
         let block_time = unix_now();
         block.mut_header().set_timestamp(AsMillis::as_millis(&block_time));
@@ -407,12 +407,12 @@ impl Processor{
                 }
                 Cmd::Clear => {
                     info!("Processor receives Snapshot::Clear: {:?}", req);
-                    self.bft_actuator.send(BftMsg::Clear).unwrap();
                     self.snapshot_response(Resp::ClearAck, true);
                 }
                 Cmd::End => {
                     info!("Processor receives Snapshot::End: {:?}", req);
-                    self.bft_actuator.send(BftMsg::Start).unwrap();
+                    let proof = to_bft_proof(&BftProof::from(req.get_proof().clone()));
+                    self.bft_actuator.send(BftMsg::Clear(proof)).unwrap();
                     self.snapshot_response(Resp::EndAck, true);
                 }
             }
@@ -566,7 +566,7 @@ impl BftSupport for BftBridge {
     }
 }
 
-fn to_bft_proof(proof: &Proof) -> ProtoProof {
+fn to_cita_proof(proof: &Proof) -> ProtoProof {
     let commits: HashMap<Address, Signature> = proof.precommit_votes.iter()
         .map(|(addr, sig)|{
             (Address::from(&addr[..]), Signature::from(&sig[..]))
@@ -582,6 +582,19 @@ fn to_bft_proof(proof: &Proof) -> ProtoProof {
     proof.set_content(encoded_proof);
     proof.set_field_type(ProofType::Bft);
     proof
+}
+
+fn to_bft_proof(proof: &BftProof) -> Proof {
+    let precommit_votes: HashMap<Vec<u8>, Vec<u8>> = proof.commits.iter()
+        .map(|(addr, sig)| {
+            (addr.to_vec(), sig.0.to_vec())
+        }).collect();
+    Proof{
+        block_hash: proof.proposal.to_vec(),
+        height: proof.height as u64,
+        round: proof.round as u64,
+        precommit_votes,
+    }
 }
 
 #[derive(Clone, Debug)]
