@@ -71,14 +71,14 @@ extern crate time;
 extern crate util;
 
 use bft::BftActuator;
+use cita_directories::DataPath;
 use clap::App;
 use pubsub::channel;
 use std::sync::Arc;
 use std::thread;
-use cita_directories::DataPath;
 
 mod core;
-use crate::core::bft_bridge::{Processor, BftBridge};
+use crate::core::bft_bridge::{BftBridge, Processor};
 use crate::core::params::PrivateKey;
 use crate::crypto::Signer;
 use libproto::router::{MsgType, RoutingKey, SubModules};
@@ -148,12 +148,21 @@ fn main() {
         trace!("Bft bridge initialized!");
         let bft_actuator = BftActuator::new(Arc::new(bridge), signer.address.to_vec(), &wal_path);
         trace!("Bft actuator initialized!");
-        let mut processor = Processor::new(p2b_b, p2b_c, p2b_f, p2b_s, p2b_t, p2r, p4b, p4r, bft_actuator, pk);
+        let mut processor = Processor::new(
+            p2b_b,
+            p2b_c,
+            p2b_f,
+            p2b_s,
+            p2b_t,
+            p2r,
+            p4b,
+            p4r,
+            bft_actuator,
+            pk,
+        );
         trace!("Processor initialized!");
         processor.start();
     });
 
     main_thd.join().unwrap();
 }
-
-
