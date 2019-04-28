@@ -44,7 +44,8 @@ pub enum BridgeMsg{
     CheckTxReq(Vec<u8>, Vec<u8>, u64, u64),
     CheckTxResp(bool),
     Transmit(BftMsg),
-    Commit(Commit),
+    CommitReq(Commit),
+    CommitResp(Result<Status, BridgeError>),
     GetBlockReq(u64),
     GetBlockResp(Result<Vec<u8>, BridgeError>),
     SignReq(Vec<u8>),
@@ -53,6 +54,7 @@ pub enum BridgeMsg{
 
 pub struct Processor {
     p2b_b: Sender<BridgeMsg>,
+    p2b_c: Sender<BridgeMsg>,
     p2b_f: Sender<BridgeMsg>,
     p2b_s: Sender<BridgeMsg>,
     p2b_t: Sender<BridgeMsg>,
@@ -70,6 +72,7 @@ pub struct Processor {
 
     get_block_reqs: VecDeque<u64>,
     check_tx_reqs: VecDeque<(u64, u64)>,
+    commit_reqs: VecDeque<u64>,
 
     get_block_resps: HashMap<u64, BlockTxs>,
     check_tx_resps: HashMap<(u64, u64), VerifyBlockResp>,
@@ -114,7 +117,25 @@ impl Processor{
                         let rich_status = msg.take_rich_status().unwrap();
                         trace!("Processor receives rich_status:{:?}!", &rich_status);
                         let status = self.extract_status(rich_status);
-                        self.bft_actuator.send(BftMsg::Status(status)).unwrap();
+                        let status_height = status.height;
+
+                        let mut flag = true;
+                        let mut front_h = self.commit_reqs.front();
+                        while front_h.is_some() {
+                            let req_height =  *front_h.unwrap();
+                            if req_height == status_height {
+                                self.p2b_c.send(BridgeMsg::CommitResp(Ok(status.clone()))).unwrap();
+                                flag = false;
+                            }
+                            if req_height > status_height {
+                                break;
+                            }
+                            self.commit_reqs.pop_front();
+                            front_h = self.commit_reqs.front();
+                        }
+                        if flag {
+                            self.bft_actuator.send(BftMsg::Status(status)).unwrap();
+                        }
                     }
 
                     routing_key!(Auth >> BlockTxs) => {
@@ -140,15 +161,14 @@ impl Processor{
                         let block = resp.get_block();
                         self.insert_verified_txs(height, block);
 
-                        let mut flag = true;
                         let mut front_h_r = self.check_tx_reqs.front();
-                        while front_h_r.is_some() && flag{
+                        while front_h_r.is_some() {
                             let (req_height, req_round) = front_h_r.unwrap();
                             if let Some(verify_resp) = self.check_tx_resps.get(&(*req_height, *req_round)) {
                                 self.p2b_t.send(BridgeMsg::CheckTxResp(verify_resp.get_pass())).unwrap();
                                 self.check_tx_reqs.pop_front();
                             } else {
-                                flag = false;
+                                break;
                             }
 
                             front_h_r = self.check_tx_reqs.front();
@@ -203,7 +223,8 @@ impl Processor{
                         self.transmit(bft_msg);
                     }
 
-                    BridgeMsg::Commit(commit) => {
+                    BridgeMsg::CommitReq(commit) => {
+                        self.commit_reqs.push_back(commit.height);
                         self.commit(commit);
                     }
 
@@ -214,6 +235,7 @@ impl Processor{
     }
 
     pub fn new(p2b_b: Sender<BridgeMsg>,
+               p2b_c: Sender<BridgeMsg>,
                p2b_f: Sender<BridgeMsg>,
                p2b_s: Sender<BridgeMsg>,
                p2b_t: Sender<BridgeMsg>,
@@ -226,6 +248,7 @@ impl Processor{
         let address = signer.address.to_vec();
         Processor{
             p2b_b,
+            p2b_c,
             p2b_f,
             p2b_s,
             p2b_t,
@@ -240,6 +263,7 @@ impl Processor{
             version: HashMap::new(),
             get_block_reqs: VecDeque::new(),
             check_tx_reqs: VecDeque::new(),
+            commit_reqs: VecDeque::new(),
             get_block_resps: HashMap::new(),
             check_tx_resps: HashMap::new(),
             verified_txs: HashMap::new(),
@@ -475,6 +499,7 @@ impl Processor{
 pub struct BftBridge {
     b2p: Sender<BridgeMsg>,
     b4p_b: Receiver<BridgeMsg>,
+    b4p_c: Receiver<BridgeMsg>,
     b4p_f: Receiver<BridgeMsg>,
     b4p_s: Receiver<BridgeMsg>,
     b4p_t: Receiver<BridgeMsg>,
@@ -483,6 +508,7 @@ pub struct BftBridge {
 impl BftBridge {
     pub fn new(b2p: Sender<BridgeMsg>,
                b4p_b: Receiver<BridgeMsg>,
+               b4p_c: Receiver<BridgeMsg>,
                b4p_f: Receiver<BridgeMsg>,
                b4p_s: Receiver<BridgeMsg>,
                b4p_t: Receiver<BridgeMsg>
@@ -490,6 +516,7 @@ impl BftBridge {
         BftBridge{
             b2p,
             b4p_b,
+            b4p_c,
             b4p_f,
             b4p_s,
             b4p_t,
@@ -528,10 +555,11 @@ impl BftSupport for BftBridge {
     }
     /// A function to commit the proposal.
     fn commit(&self, commit: Commit) -> Result<Status, BridgeError>{
-        if let Err(_) = self.b2p.send(BridgeMsg::Commit(commit)){
-            return Err(BridgeError::CommitFailed);
+        self.b2p.send(BridgeMsg::CommitReq(commit)).unwrap();
+        if let BridgeMsg::CommitResp(status) = self.b4p_c.recv().unwrap(){
+            return status;
         }
-        Ok(Status::default())
+        Err(BridgeError::CommitFailed)
     }
 
     fn get_block(&self, height: u64) -> Result<Vec<u8>, BridgeError>{
