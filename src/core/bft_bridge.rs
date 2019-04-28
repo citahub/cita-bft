@@ -91,6 +91,8 @@ impl Processor{
                 recv(self.p4b) -> msg => get_bridge_msg = msg,
             }
 
+            info!("Processor block detect");
+
             if let Ok((key, body)) = get_rab_msg {
                 let rt_key = RoutingKey::from(&key);
                 let mut msg = Message::try_from(&body[..]).unwrap();
@@ -112,7 +114,7 @@ impl Processor{
 
                     routing_key!(Chain >> RichStatus) => {
                         let rich_status = msg.take_rich_status().unwrap();
-                        trace!("Processor receives rich_status:{:?}!", &rich_status);
+                        info!("Processor receives rich_status:{:?}!", &rich_status);
                         let status = self.extract_status(rich_status);
                         self.bft_actuator.send(BftMsg::Status(status)).unwrap();
                     }
@@ -172,12 +174,12 @@ impl Processor{
                     }
 
                     BridgeMsg::CheckBlockReq(block, height) => {
-                        trace!("Processor gets CheckBlockReq(block_hash:{:?}, height:{})!", &block.crypt_hash()[0..5], height);
+                        info!("Processor gets CheckBlockReq(block_hash:{:?}, height:{})!", &block.crypt_hash()[0..5], height);
                         self.p2b_b.send(BridgeMsg::CheckBlockResp(self.check_block(&block, height))).unwrap();
                     }
 
                     BridgeMsg::CheckTxReq(block, signed_proposal_hash, height, round) => {
-                        trace!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
+                        info!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
                         let compact_block = CompactBlock::try_from(&block).unwrap();
                         let tx_hashes = compact_block.get_body().transaction_hashes();
 
@@ -292,7 +294,8 @@ impl Processor{
         let mut block_with_proof = BlockWithProof::new();
         block_with_proof.set_blk(block);
         block_with_proof.set_proof(proof.into());
-        let msg: Message = block_with_proof.clone().into();
+        info!("Processor send {:?} to consensus", &block_with_proof);
+        let msg: Message = block_with_proof.into();
         self.p2r
             .send((
                 routing_key!(Consensus >> BlockWithProof).into(),
