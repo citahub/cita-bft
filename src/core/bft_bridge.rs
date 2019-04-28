@@ -91,8 +91,6 @@ impl Processor{
                 recv(self.p4b) -> msg => get_bridge_msg = msg,
             }
 
-            info!("Processor block detect");
-
             if let Ok((key, body)) = get_rab_msg {
                 let rt_key = RoutingKey::from(&key);
                 let mut msg = Message::try_from(&body[..]).unwrap();
@@ -114,20 +112,20 @@ impl Processor{
 
                     routing_key!(Chain >> RichStatus) => {
                         let rich_status = msg.take_rich_status().unwrap();
-                        info!("Processor receives rich_status:{:?}!", &rich_status);
+                        trace!("Processor receives rich_status:{:?}!", &rich_status);
                         let status = self.extract_status(rich_status);
                         self.bft_actuator.send(BftMsg::Status(status)).unwrap();
                     }
 
                     routing_key!(Auth >> BlockTxs) => {
                         let block_txs = msg.take_block_txs().unwrap();
-                        info!("Processor receives block_txs:{:?}!", block_txs);
+                        trace!("Processor receives block_txs:{:?}!", block_txs);
                         self.get_block_resps.entry(block_txs.get_height() + 1).or_insert(block_txs);
 
                         let mut flag = true;
                         let mut front_h = self.get_block_reqs.front();
                         while front_h.is_some() && flag {
-                            info!("Processor try feed bft of height {}", front_h.unwrap());
+                            trace!("Processor try feed bft of height {}", front_h.unwrap());
                             flag = self.try_feed_bft(*front_h.unwrap());
                             front_h = self.get_block_reqs.front();
                         }
@@ -168,18 +166,18 @@ impl Processor{
             if let Ok(bridge_msg) = get_bridge_msg {
                 match bridge_msg{
                     BridgeMsg::GetBlockReq(height) => {
-                        info!("Processor gets GetBlockReq(height: {})!", height);
+                        trace!("Processor gets GetBlockReq(height: {})!", height);
                         self.get_block_reqs.push_back(height);
                         self.try_feed_bft(height);
                     }
 
                     BridgeMsg::CheckBlockReq(block, height) => {
-                        info!("Processor gets CheckBlockReq(block_hash:{:?}, height:{})!", &block.crypt_hash()[0..5], height);
+                        trace!("Processor gets CheckBlockReq(block_hash:{:?}, height:{})!", &block.crypt_hash()[0..5], height);
                         self.p2b_b.send(BridgeMsg::CheckBlockResp(self.check_block(&block, height))).unwrap();
                     }
 
                     BridgeMsg::CheckTxReq(block, signed_proposal_hash, height, round) => {
-                        info!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
+                        trace!("Processor gets CheckTxReq(block_hash:{:?}, height:{}, round:{})!", &block.crypt_hash()[0..5], height, round);
                         let compact_block = CompactBlock::try_from(&block).unwrap();
                         let tx_hashes = compact_block.get_body().transaction_hashes();
 
@@ -294,7 +292,7 @@ impl Processor{
         let mut block_with_proof = BlockWithProof::new();
         block_with_proof.set_blk(block);
         block_with_proof.set_proof(proof.into());
-        info!("Processor send {:?} to consensus", &block_with_proof);
+        trace!("Processor send {:?} to consensus", &block_with_proof);
         let msg: Message = block_with_proof.into();
         self.p2r
             .send((
