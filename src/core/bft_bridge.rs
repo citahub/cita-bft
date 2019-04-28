@@ -271,8 +271,35 @@ impl Processor{
         }
     }
 
-    // TODO: check pre_hash and headers
-    fn check_block(&self, _block: &[u8], _height: u64) -> bool{
+    fn check_block(&self, block: &[u8], height: u64) -> bool{
+        if height < 1 {
+            return false;
+        }
+
+        let version = self.version.get(&(height - 1));
+        let pre_hash = self.pre_hash.get(&(height - 1));
+        if version.is_none() || pre_hash.is_none() {
+            trace!("version: {:?}, pre_hash: {:?}", version, pre_hash);
+            return false;
+        }
+
+        let compact_block = CompactBlock::try_from(block).unwrap();
+        if version.unwrap() != &compact_block.get_version() {
+            return false;
+        }
+        let header = compact_block.get_header();
+        if height != header.height {
+            return false;
+        }
+
+        if pre_hash.unwrap() != &H256::from_slice(&header.prevhash) {
+            return false;
+        }
+
+        if header.transactions_root != compact_block.get_body().transactions_root().to_vec() {
+            return false;
+        }
+
         true
     }
 
