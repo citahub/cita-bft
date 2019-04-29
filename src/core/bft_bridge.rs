@@ -673,6 +673,9 @@ impl Processor {
         if tx_hashes.is_empty() {
             return Ok(compact_block.complete(vec![]));
         }
+
+        // verified_txs is empty when stop and restart node, so commit will failed
+        // it requires chain to send new status to bft-rs
         let map = self
             .verified_txs
             .get(&height)
