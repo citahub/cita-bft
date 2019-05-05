@@ -78,7 +78,7 @@ use std::sync::Arc;
 use std::thread;
 
 mod core;
-use crate::core::bft_bridge::{BftBridge, Processor};
+use crate::core::bft_bridge::{BftBridge, Processor, P2B};
 use crate::core::params::PrivateKey;
 use crate::crypto::Signer;
 use libproto::router::{MsgType, RoutingKey, SubModules};
@@ -141,6 +141,13 @@ fn main() {
         let (p2b_f, b4p_f) = channel::unbounded();
         let (p2b_s, b4p_s) = channel::unbounded();
         let (p2b_t, b4p_t) = channel::unbounded();
+        let p2b = P2B {
+            check_block: p2b_b,
+            commit: p2b_c,
+            get_block: p2b_f,
+            sign: p2b_s,
+            check_txs: p2b_t,
+        };
 
         let wal_path = DataPath::wal_path();
 
@@ -148,18 +155,7 @@ fn main() {
         trace!("Bft bridge initialized!");
         let bft_actuator = BftActuator::new(Arc::new(bridge), signer.address.to_vec(), &wal_path);
         trace!("Bft actuator initialized!");
-        let mut processor = Processor::new(
-            p2b_b,
-            p2b_c,
-            p2b_f,
-            p2b_s,
-            p2b_t,
-            p2r,
-            p4b,
-            p4r,
-            bft_actuator,
-            pk,
-        );
+        let mut processor = Processor::new(p2b, p2r, p4b, p4r, bft_actuator, pk);
         trace!("Processor initialized!");
         processor.start();
     });
