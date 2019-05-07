@@ -1937,6 +1937,13 @@ impl Bft {
                 self.verified_blocks.clear();
             }
         } else if self.step == Step::CommitWait {
+            // When CommitWait,need timeout_process to do some work
+            let _ = self.timer_seter.send(TimeoutInfo {
+                timeval: now,
+                height,
+                round,
+                step: Step::CommitWait,
+            });
         }
     }
 
