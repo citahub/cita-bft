@@ -1894,6 +1894,7 @@ impl Bft {
     pub fn redo_work(&mut self) {
         let height = self.height;
         let round = self.round;
+        let now = Instant::now();
 
         trace!("redo_work {} begin", self);
         if self.step == Step::Propose || self.step == Step::ProposeWait {
@@ -1901,7 +1902,6 @@ impl Bft {
         } else if self.step == Step::Prevote || self.step == Step::PrevoteWait {
             self.pre_proc_prevote();
             self.proc_prevote(height, round);
-            let now = Instant::now();
             if self.step == Step::PrevoteWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: now + self.params.timer.get_prevote(),
@@ -1913,7 +1913,6 @@ impl Bft {
         } else if self.step == Step::Precommit || self.step == Step::PrecommitWait {
             self.pre_proc_precommit();
             self.proc_precommit(height, round);
-            let now = Instant::now();
             if self.step == Step::PrecommitWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: now + self.params.timer.get_precommit(),
@@ -1937,6 +1936,13 @@ impl Bft {
                 self.verified_blocks.clear();
             }
         } else if self.step == Step::CommitWait {
+            // When CommitWait,need timeout_process to do some work
+            let _ = self.timer_seter.send(TimeoutInfo {
+                timeval: now,
+                height,
+                round,
+                step: Step::CommitWait,
+            });
         }
     }
 
