@@ -16,7 +16,6 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 pub mod bft_bridge;
-pub mod ntp;
 pub mod params;
 
 pub use self::bft_bridge::*;
