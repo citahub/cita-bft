@@ -483,7 +483,7 @@ impl Bft {
                     }
                 }
 
-                if self.step == Step::Prevote {
+                if self.step == Step::Prevote || (self.round < round && self.step < Step::Commit) {
                     self.change_state_step(height, round, Step::PrevoteWait, false);
                     let now = Instant::now();
                     let _ = self.timer_seter.send(TimeoutInfo {
@@ -620,7 +620,8 @@ impl Bft {
                     }
                 }
 
-                if self.step == Step::Precommit {
+                if self.step == Step::Precommit || (self.round < round && self.step < Step::Commit)
+                {
                     self.change_state_step(height, round, Step::PrecommitWait, false);
                     let now = Instant::now();
                     let _ = self.timer_seter.send(TimeoutInfo {
