@@ -733,7 +733,7 @@ impl BftBridge {
 
 impl BftSupport for BftBridge {
     type Error = BridgeError;
-    fn check_block(&self, block: &[u8], height: u64) -> Result<(), BridgeError> {
+    fn check_block(&self, block: &[u8], _block_hash: &[u8], height: u64) -> Result<(), BridgeError> {
         self.b2p
             .send(BridgeMsg::CheckBlockReq(block.to_vec(), height))
             .map_err(|e| {
@@ -759,6 +759,7 @@ impl BftSupport for BftBridge {
     fn check_txs(
         &self,
         block: &[u8],
+        _block_hash: &[u8],
         signed_proposal_hash: &[u8],
         height: u64,
         round: u64,
