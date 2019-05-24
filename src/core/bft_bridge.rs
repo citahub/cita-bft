@@ -15,8 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::convert::{From, Into};
-
 use crate::core::params::PrivateKey;
 use crate::types::{Address, H256};
 use bft::{
@@ -46,7 +44,7 @@ pub type PubType = (String, Vec<u8>);
 
 #[derive(Debug)]
 pub enum BridgeMsg {
-    CheckBlockReq(Vec<u8>, u64),
+    CheckBlockReq(Vec<u8>, Vec<u8>, u64),
     CheckBlockResp(Result<(), BridgeError>),
     CheckTxReq(Vec<u8>, Vec<u8>, u64, u64),
     CheckTxResp(bool),
@@ -54,7 +52,7 @@ pub enum BridgeMsg {
     CommitReq(Commit),
     CommitResp(Result<Status, BridgeError>),
     GetBlockReq(u64),
-    GetBlockResp(Result<Vec<u8>, BridgeError>),
+    GetBlockResp(Result<(Vec<u8>, Vec<u8>), BridgeError>),
     SignReq(Vec<u8>),
     SignResp(Result<BftSig, BridgeError>),
 }
@@ -292,7 +290,7 @@ impl Processor {
                 self.try_feed_bft(height)?;
             }
 
-            BridgeMsg::CheckBlockReq(block, height) => {
+            BridgeMsg::CheckBlockReq(block, block_hash, height) => {
                 trace!(
                     "Processor gets CheckBlockReq(block_hash:{:?}, height:{})!",
                     &block.crypt_hash()[0..5],
@@ -300,7 +298,7 @@ impl Processor {
                 );
                 self.p2b
                     .check_block
-                    .send(BridgeMsg::CheckBlockResp(self.check_block(&block, height)))
+                    .send(BridgeMsg::CheckBlockResp(self.check_block(&block, &block_hash, height)))
                     .map_err(|e| {
                         BftError::SendMsgFailed(format!(
                             "{:?} of check_block_resp to bft_bridge",
@@ -399,7 +397,7 @@ impl Processor {
         }
     }
 
-    fn check_block(&self, block: &[u8], height: u64) -> Result<(), BridgeError> {
+    fn check_block(&self, block: &[u8], block_hash: &[u8], height: u64) -> Result<(), BridgeError> {
         if height < 1 {
             return Err(BridgeError::CheckBlockFailed(format!(
                 "block height {} is less than 1",
@@ -416,7 +414,8 @@ impl Processor {
             )));
         }
 
-        let compact_block = CompactBlock::try_from(block).unwrap();
+        let compact_block = CompactBlock::try_from(block)
+            .map_err(|e| BridgeError::TryFromFailed(format!("{:?} of CompactBlock", e)))?;
         let blk_version = compact_block.get_version();
         if version.unwrap() != &blk_version {
             return Err(BridgeError::CheckBlockFailed(format!(
@@ -424,6 +423,14 @@ impl Processor {
                 blk_version, version
             )));
         }
+        let hash = compact_block.crypt_hash().to_vec();
+        if hash != block_hash.to_vec() {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "block hash {:?} != proposal's block_hash {:?}",
+                &hash, block_hash
+            )));
+        }
+
         let header = compact_block.get_header();
         if height != header.height {
             return Err(BridgeError::CheckBlockFailed(format!(
@@ -516,7 +523,7 @@ impl Processor {
         Ok(())
     }
 
-    fn get_block(&self, height: u64, block_txs: &BlockTxs) -> Result<Vec<u8>, BridgeError> {
+    fn get_block(&self, height: u64, block_txs: &BlockTxs) -> Result<(Vec<u8>, Vec<u8>), BridgeError> {
         let version = self.version.get(&(height - 1));
         let pre_hash = self.pre_hash.get(&(height - 1));
         let mut proof = self.proof.get(&(height - 1));
@@ -550,10 +557,13 @@ impl Processor {
         block.mut_header().set_proposer(self.address.clone());
         let blk: CompactBlock = block.clone().compact();
         trace!("Processor get block {:?}", &blk);
+
+        let block_hash = blk.crypt_hash().to_vec();
         let encode: Vec<u8> = blk
             .try_into()
             .map_err(|e| BridgeError::TryIntoFailed(format!("{:?} of CompactBlock", e)))?;
-        Ok(encode)
+
+        Ok((encode, block_hash))
     }
 
     fn sign(&self, hash: &[u8]) -> Result<BftSig, BridgeError> {
@@ -733,9 +743,9 @@ impl BftBridge {
 
 impl BftSupport for BftBridge {
     type Error = BridgeError;
-    fn check_block(&self, block: &[u8], _block_hash: &[u8], height: u64) -> Result<(), BridgeError> {
+    fn check_block(&self, block: &[u8], block_hash: &[u8], height: u64) -> Result<(), BridgeError> {
         self.b2p
-            .send(BridgeMsg::CheckBlockReq(block.to_vec(), height))
+            .send(BridgeMsg::CheckBlockReq(block.to_vec(), block_hash.to_vec(), height))
             .map_err(|e| {
                 BridgeError::SendMsgFailed(format!("{:?} of check_block_req to processor", e))
             })?;
@@ -821,7 +831,7 @@ impl BftSupport for BftBridge {
             })
     }
 
-    fn get_block(&self, height: u64) -> Result<Vec<u8>, BridgeError> {
+    fn get_block(&self, height: u64) -> Result<(Vec<u8>, Vec<u8>), BridgeError> {
         self.b2p.send(BridgeMsg::GetBlockReq(height)).map_err(|e| {
             BridgeError::SendMsgFailed(format!("{:?} of get_block_req to processor", e))
         })?;
@@ -831,8 +841,8 @@ impl BftSupport for BftBridge {
                 BridgeError::RcvMsgFailed(format!("{:?} of get_block_resp from processor", e))
             })
             .and_then(|bft_msg| {
-                if let BridgeMsg::GetBlockResp(block) = bft_msg {
-                    block
+                if let BridgeMsg::GetBlockResp(result) = bft_msg {
+                    result
                 } else {
                     Err(BridgeError::MismatchType(format!(
                         "expect GetBlockResp found {:?}",
@@ -926,6 +936,7 @@ pub enum BridgeError {
     SendMsgFailed(String),
     RcvMsgFailed(String),
     TryIntoFailed(String),
+    TryFromFailed(String),
     MismatchType(String),
 }
 
