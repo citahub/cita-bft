@@ -198,10 +198,10 @@ impl Processor {
                     .entry(block_txs.get_height() + 1)
                     .or_insert_with(|| block_txs);
 
-                let mut front_h = self.get_block_reqs.front();
+                let mut front_h = self.get_block_reqs.front().cloned();
                 while front_h.is_some() {
-                    self.try_feed_bft(*front_h.unwrap())?;
-                    front_h = self.get_block_reqs.front();
+                    self.try_feed_bft(front_h.unwrap())?;
+                    front_h = self.get_block_reqs.front().cloned();
                 }
             }
 
