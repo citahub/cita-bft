@@ -198,10 +198,10 @@ impl Processor {
                     .entry(block_txs.get_height() + 1)
                     .or_insert_with(|| block_txs);
 
-                let mut front_h = self.get_block_reqs.pop_front();
+                let mut front_h = self.get_block_reqs.front();
                 while front_h.is_some() {
-                    self.try_feed_bft(front_h.unwrap())?;
-                    front_h = self.get_block_reqs.pop_front();
+                    self.try_feed_bft(*front_h.unwrap())?;
+                    front_h = self.get_block_reqs.front();
                 }
             }
 
@@ -629,7 +629,7 @@ impl Processor {
         msg
     }
 
-    fn try_feed_bft(&self, height: Height) -> Result<(), BftError> {
+    fn try_feed_bft(&mut self, height: Height) -> Result<(), BftError> {
         if let Some(block_txs) = self.get_block_resps.get(&height) {
             self.processor_to_bft
                 .get_block
@@ -637,6 +637,7 @@ impl Processor {
                 .map_err(|e| {
                     BftError::SendMsgFailed(format!("{:?} of get_block_resp to bft_bridge", e))
                 })?;
+            self.get_block_reqs.pop_front();
             return Ok(());
         }
         Err(BftError::NotYetGetResp(format!(
