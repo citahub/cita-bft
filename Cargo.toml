@@ -25,14 +25,14 @@ logger = { git = "https://github.com/cryptape/cita-common.git", branch = "develo
 authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 rustc-hex = "1.0"
 min-max-heap = "1.2.2"
-bft-rs = { git = "https://github.com/cryptape/bft-rs.git", branch = "develop" }
+bft-rs = { git = "https://github.com/cryptape/bft-rs.git", branch = "compact_block_features" }
 
 [build-dependencies]
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 
 
 [features]
-default = ["secp256k1", "sha3hash", "rabbitmq", "verify_req"]
+default = ["secp256k1", "sha3hash", "rabbitmq", "verify_req", "compact_block"]
 secp256k1 = ["cita-crypto/secp256k1", "libproto/secp256k1", "proof/secp256k1","engine/secp256k1"]
 ed25519 = ["cita-crypto/ed25519", "libproto/ed25519", "proof/ed25519", "engine/ed25519"]
 sm2 = ["cita-crypto/sm2", "libproto/sm2", "proof/sm2", "engine/sm2"]
@@ -43,3 +43,4 @@ rabbitmq = ["pubsub/rabbitmq"]
 zeromq = ["pubsub/zeromq"]
 kafka = ["pubsub/kafka"]
 verify_req = ["bft-rs/verify_req"]
+compact_block = ["bft-rs/compact_block"]

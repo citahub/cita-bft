@@ -78,7 +78,7 @@ use std::sync::Arc;
 use std::thread;
 
 mod core;
-use crate::core::bft_bridge::{BftBridge, Processor, P2B};
+use crate::core::bft_bridge::{BftBridge, BftFromProcessor, Processor, ProcessorToBft};
 use crate::core::params::PrivateKey;
 use crate::crypto::Signer;
 use libproto::router::{MsgType, RoutingKey, SubModules};
@@ -115,8 +115,8 @@ fn main() {
     }
 
     // mq pubsub module
-    let (r2p, p4r) = channel::unbounded();
-    let (p2r, r4p) = channel::unbounded();
+    let (rabbit_to_processor, processor_from_rabbit) = channel::unbounded();
+    let (processor_to_rabbit, rabbit_from_processor) = channel::unbounded();
     start_pubsub(
         "consensus",
         routing_key!([
@@ -127,36 +127,48 @@ fn main() {
             Auth >> VerifyBlockResp,
             Snapshot >> SnapshotReq,
         ]),
-        r2p,
-        r4p,
+        rabbit_to_processor,
+        rabbit_from_processor,
     );
 
     let pk = PrivateKey::new(pk_path);
     let signer = Signer::from(pk.signer);
 
     let main_thd = thread::spawn(move || {
-        let (b2p, p4b) = channel::unbounded();
-        let (p2b_b, b4p_b) = channel::unbounded();
-        let (p2b_c, b4p_c) = channel::unbounded();
-        let (p2b_f, b4p_f) = channel::unbounded();
-        let (p2b_s, b4p_s) = channel::unbounded();
-        let (p2b_t, b4p_t) = channel::unbounded();
-        let p2b = P2B {
-            check_block: p2b_b,
-            commit: p2b_c,
-            get_block: p2b_f,
-            sign: p2b_s,
-            check_txs: p2b_t,
+        let (bft_to_processor, processor_from_bft) = channel::unbounded();
+        let (processor_to_bft_on_check_block, bft_from_processor_on_check_block) =
+            channel::unbounded();
+        let (processor_to_bft_on_commit, bft_from_processor_on_commit) = channel::unbounded();
+        let (processor_to_bft_on_get_block, bft_from_processor_on_get_block) = channel::unbounded();
+        let (processor_to_bft_on_sign, bft_from_processor_on_sign) = channel::unbounded();
+        let processor_to_block = ProcessorToBft {
+            check_block: processor_to_bft_on_check_block,
+            commit: processor_to_bft_on_commit,
+            get_block: processor_to_bft_on_get_block,
+            sign: processor_to_bft_on_sign,
+        };
+        let bft_from_processor = BftFromProcessor {
+            check_block: bft_from_processor_on_check_block,
+            commit: bft_from_processor_on_commit,
+            get_block: bft_from_processor_on_get_block,
+            sign: bft_from_processor_on_sign,
         };
 
         let wal_path = DataPath::wal_path();
 
-        let bridge = BftBridge::new(b2p, b4p_b, b4p_c, b4p_f, b4p_s, b4p_t);
+        let bridge = BftBridge::new(bft_to_processor, bft_from_processor);
         trace!("Bft bridge initialized!");
         let bft_actuator =
             BftActuator::new(Arc::new(bridge), signer.address.to_vec().into(), &wal_path);
         trace!("Bft actuator initialized!");
-        let mut processor = Processor::new(p2b, p2r, p4b, p4r, bft_actuator, pk);
+        let mut processor = Processor::new(
+            processor_to_block,
+            processor_to_rabbit,
+            processor_from_bft,
+            processor_from_rabbit,
+            bft_actuator,
+            pk,
+        );
         trace!("Processor initialized!");
         processor.start();
     });
