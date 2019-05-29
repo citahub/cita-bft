@@ -442,7 +442,7 @@ impl Processor {
                 .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp {
                     is_pass: true,
                     round,
-                    complete_block: BftBlock::default(),
+                    complete_block: block.clone(),
                 })))
                 .map_err(|e| {
                     BridgeError::SendMsgFailed(format!("{:?} of check_block_resp to bft_bridge", e))
@@ -673,50 +673,6 @@ impl Processor {
         self.get_block_resps.retain(|&hi, _| hi >= height);
         self.check_block_resps.retain(|(hi, _), _| *hi >= height);
     }
-
-    //    fn insert_verified_txs(&mut self, height: Height, block: &Block) {
-    //        let txs = block.get_body().get_transactions();
-    //        if let Some(map) = self.verified_txs.get_mut(&height) {
-    //            for tx in txs {
-    //                let tx_hash = tx.crypt_hash();
-    //                map.entry(tx_hash).or_insert_with(|| tx.to_owned());
-    //            }
-    //        } else {
-    //            let mut map = HashMap::new();
-    //            for tx in txs {
-    //                let tx_hash = tx.crypt_hash();
-    //                map.insert(tx_hash, tx.to_owned());
-    //            }
-    //            self.verified_txs.insert(height, map);
-    //        }
-    //    }
-
-    //    fn complete_block(&mut self, height: Height, block: BftBlock) -> Result<Block, BftError> {
-    //        let compact_block = CompactBlock::try_from(block.as_slice())
-    //            .map_err(|e| BftError::TryFromFailed(format!("{:?} of CompactBlock", e)))?;
-    //        let tx_hashes = compact_block.get_body().transaction_hashes();
-    //        if tx_hashes.is_empty() {
-    //            return Ok(compact_block.complete(vec![]));
-    //        }
-    //
-    //        // verified_txs is empty when stop and restart node, so commit will failed
-    //        // it requires chain to send new status to bft-rs
-    //        let map = self.verified_txs.get(&height).ok_or_else(|| {
-    //            BftError::NotYetGetResp(format!("verified_txs of height {} is empty", height))
-    //        })?;
-    //        let mut signed_txs = Vec::new();
-    //        for tx_hash in tx_hashes {
-    //            let signed_tx = map.get(&tx_hash).ok_or_else(|| {
-    //                BftError::NotYetGetResp(format!(
-    //                    "verified_txs of tx_hash {} is not exist",
-    //                    &tx_hash
-    //                ))
-    //            })?;
-    //            signed_txs.push(signed_tx.to_owned());
-    //        }
-    //
-    //        Ok(compact_block.complete(signed_txs))
-    //    }
 }
 
 pub struct BftBridge {
