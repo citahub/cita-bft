@@ -19,7 +19,8 @@ use crate::core::params::PrivateKey;
 use crate::types::{Address, H256};
 use bft::{
     get_proposal_hash, Address as BftAddr, BftActuator, BftMsg, BftSupport, Block as BftBlock,
-    Commit, Hash as BftHash, Height, Node, Proof, Round, Signature as BftSig, Status, VerifyResp,
+    Commit, Hash as BftHash, Height, Node, Proof as BftProof, Round, Signature as BftSig, Status, VerifyResp,
+    check_proof as bft_check_proof,
 };
 use bincode::{serialize, Infinite};
 use crypto::{pubkey_to_address, Sign, Signature, Signer, SIGNATURE_BYTES_LEN};
@@ -31,7 +32,7 @@ use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, auth::VerifyBlockResp, Message, Origin, TryFrom, TryInto, ZERO_ORIGIN};
 use lru_cache::LruCache;
-use proof::BftProof;
+use proof::BftProof as CommonProof;
 use pubsub::channel::{select, Receiver, RecvError, Sender};
 use std::collections::{HashMap, VecDeque};
 
@@ -78,7 +79,7 @@ pub struct Processor {
     signer: PrivateKey,
     address: BftAddr,
 
-    proof: HashMap<Height, Proof>,
+    proof: HashMap<Height, BftProof>,
     pre_hash: HashMap<Height, H256>,
     version: HashMap<Height, u32>,
 
@@ -128,9 +129,9 @@ impl Processor {
                 })?;
 
                 if let Some(signed_proposal_hash) =
-                    get_proposal_hash(&encode, |msg: &[u8]| -> BftHash {
-                        msg.to_vec().crypt_hash().to_vec().into()
-                    })
+                get_proposal_hash(&encode, |msg: &[u8]| -> BftHash {
+                    msg.to_vec().crypt_hash().to_vec().into()
+                })
                 {
                     let origin = msg.get_origin();
                     self.origins.insert(signed_proposal_hash, origin);
@@ -273,7 +274,7 @@ impl Processor {
                     }
                     Cmd::End => {
                         info!("Processor receives Snapshot::End: {:?}", req);
-                        let proof = to_bft_proof(&BftProof::from(req.get_proof().clone()));
+                        let proof = to_bft_proof(&CommonProof::from(req.get_proof().clone()));
                         self.bft_actuator.send(BftMsg::Clear(proof)).map_err(|e| {
                             BftError::SendMsgFailed(format!("{:?} of clear to bft_actuator", e))
                         })?;
@@ -536,7 +537,7 @@ impl Processor {
         let version = self.version.get(&(height - 1));
         let pre_hash = self.pre_hash.get(&(height - 1));
         let mut proof = self.proof.get(&(height - 1));
-        let default_proof = Proof::default();
+        let default_proof = BftProof::default();
         if height == 1 {
             proof = Some(&default_proof);
         }
@@ -822,17 +823,34 @@ impl BftSupport for BftBridge {
     }
 
     fn crypt_hash(&self, msg: &[u8]) -> BftHash {
-        msg.to_vec().crypt_hash().to_vec().into()
+        crypt_hash(msg)
     }
 }
 
-fn to_cita_proof(proof: &Proof) -> ProtoProof {
+fn crypt_hash(msg: &[u8]) -> BftHash {
+    msg.to_vec().crypt_hash().to_vec().into()
+}
+
+#[allow(dead_code)]
+fn check_sig(signature: &BftSig, hash: &BftHash) -> Option<BftAddr> {
+    if signature.as_slice().len() != SIGNATURE_BYTES_LEN {
+        return None
+    }
+    let signature = Signature::from(signature.as_slice());
+    signature
+        .recover(&H256::from(hash.as_slice())).map(|pubkey|{
+        let address = pubkey_to_address(&pubkey);
+        address.to_vec().into()
+    }).ok()
+}
+
+fn to_cita_proof(proof: &BftProof) -> ProtoProof {
     let commits: HashMap<Address, Signature> = proof
         .precommit_votes
         .iter()
         .map(|(addr, sig)| (Address::from(&addr[..]), Signature::from(&sig[..])))
         .collect();
-    let bft_proof = BftProof {
+    let bft_proof = CommonProof {
         proposal: H256::from(&proof.block_hash[..]),
         height: proof.height as usize,
         round: proof.round as usize,
@@ -845,18 +863,33 @@ fn to_cita_proof(proof: &Proof) -> ProtoProof {
     proof
 }
 
-fn to_bft_proof(proof: &BftProof) -> Proof {
+fn to_bft_proof(proof: &CommonProof) -> BftProof {
     let precommit_votes: HashMap<BftAddr, BftSig> = proof
         .commits
         .iter()
         .map(|(addr, sig)| (addr.to_vec().into(), sig.0.to_vec().into()))
         .collect();
-    Proof {
+    BftProof {
         block_hash: proof.proposal.to_vec().into(),
         height: proof.height as u64,
         round: proof.round as u64,
         precommit_votes,
     }
+}
+
+#[allow(dead_code)]
+pub fn check_proof(proof: &CommonProof, height: Height, authorities: &[Address]) -> bool {
+    let bft_proof = to_bft_proof(proof);
+
+    let authority_list: Vec<Node> = authorities
+        .iter()
+        .map(|address| Node {
+            address: address.to_vec().into(),
+            proposal_weight: 1,
+            vote_weight: 1,
+        })
+        .collect();
+    bft_check_proof(&bft_proof, height + 1, &authority_list, crypt_hash, check_sig)
 }
 
 #[derive(Clone, Debug)]
