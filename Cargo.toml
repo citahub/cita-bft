@@ -9,6 +9,7 @@ dotenv = "0.13.0"
 serde = "1.0"
 serde_derive = "1.0"
 bincode = "0.8.0"
+cita-logger = "0.1.0"
 libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 clap = "2"
@@ -21,7 +22,6 @@ proof = { git = "https://github.com/cryptape/cita-common.git", branch = "develop
 time = "0.1.36"
 engine = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 lru-cache = "0.1"
-logger = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 cpuprofiler = "0.0.3"
 authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 rustc-hex = "1.0"

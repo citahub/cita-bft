@@ -236,6 +236,7 @@ dependencies = [
  "bincode 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cita-crypto 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "cita-directories 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
+ "cita-logger 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cita-types 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "clap 2.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cpuprofiler 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -243,7 +244,6 @@ dependencies = [
  "engine 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "hashable 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "libproto 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
- "logger 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "lru-cache 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "min-max-heap 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ntp 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -296,6 +296,19 @@ dependencies = [
  "rustc-serialize 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.79 (registry+https://github.com/rust-lang/crates.io-index)",
  "sodiumoxide 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "cita-logger"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "chrono 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-channel 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.46 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log4rs 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "signal-hook 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2397,6 +2410,7 @@ dependencies = [
 "checksum cita-crypto-trait 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-directories 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-ed25519 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
+"checksum cita-logger 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "5c0fccf6b33be6ab71808f2b5bb36206acef2eee9f5d0d29f87b81327242b521"
 "checksum cita-merklehash 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-secp256k1 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-sm2 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"

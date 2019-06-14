@@ -483,7 +483,7 @@ impl Bft {
                     }
                 }
 
-                if self.step == Step::Prevote {
+                if self.step == Step::Prevote || (self.round < round && self.step < Step::Commit) {
                     self.change_state_step(height, round, Step::PrevoteWait, false);
                     let now = Instant::now();
                     let _ = self.timer_seter.send(TimeoutInfo {
@@ -620,7 +620,8 @@ impl Bft {
                     }
                 }
 
-                if self.step == Step::Precommit {
+                if self.step == Step::Precommit || (self.round < round && self.step < Step::Commit)
+                {
                     self.change_state_step(height, round, Step::PrecommitWait, false);
                     let now = Instant::now();
                     let _ = self.timer_seter.send(TimeoutInfo {
@@ -1894,6 +1895,7 @@ impl Bft {
     pub fn redo_work(&mut self) {
         let height = self.height;
         let round = self.round;
+        let now = Instant::now();
 
         trace!("redo_work {} begin", self);
         if self.step == Step::Propose || self.step == Step::ProposeWait {
@@ -1901,7 +1903,6 @@ impl Bft {
         } else if self.step == Step::Prevote || self.step == Step::PrevoteWait {
             self.pre_proc_prevote();
             self.proc_prevote(height, round);
-            let now = Instant::now();
             if self.step == Step::PrevoteWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: now + self.params.timer.get_prevote(),
@@ -1913,7 +1914,6 @@ impl Bft {
         } else if self.step == Step::Precommit || self.step == Step::PrecommitWait {
             self.pre_proc_precommit();
             self.proc_precommit(height, round);
-            let now = Instant::now();
             if self.step == Step::PrecommitWait {
                 let _ = self.timer_seter.send(TimeoutInfo {
                     timeval: now + self.params.timer.get_precommit(),

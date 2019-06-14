@@ -1,5 +1,5 @@
 // CITA
-// Copyright 2016-2017 Cryptape Technologies LLC.
+// Copyright 2016-2019 Cryptape Technologies LLC.
 
 // This program is free software: you can redistribute it
 // and/or modify it under the terms of the GNU General Public
@@ -45,29 +45,14 @@
 //!     | consensus | Consensus | Snapshot        | SnapshotResp          |
 //!
 
-extern crate authority_manage;
-extern crate bincode;
 extern crate cita_crypto as crypto;
-extern crate cita_directories;
 extern crate cita_types as types;
-extern crate clap;
-extern crate cpuprofiler;
-extern crate dotenv;
-extern crate engine;
-extern crate hashable;
-extern crate min_max_heap;
 #[macro_use]
 extern crate libproto;
 #[macro_use]
-extern crate logger;
-extern crate lru_cache;
-extern crate ntp;
-extern crate proof;
-extern crate pubsub;
-extern crate rustc_hex;
+extern crate cita_logger as logger;
 #[macro_use]
 extern crate serde_derive;
-extern crate time;
 #[macro_use]
 extern crate util;
 
