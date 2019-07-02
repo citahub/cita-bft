@@ -21,7 +21,7 @@ proof = { git = "https://github.com/cryptape/cita-common.git", branch = "develop
 time = "0.1.36"
 engine = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 lru-cache = "0.1"
-logger = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+cita-logger = "0.1.0"
 authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 rustc-hex = "1.0"
 min-max-heap = "1.2.2"
