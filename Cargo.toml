@@ -25,7 +25,7 @@ cita-logger = "0.1.0"
 authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 rustc-hex = "1.0"
 min-max-heap = "1.2.2"
-bft-rs = { git = "https://github.com/cryptape/bft-rs.git", branch = "develop" }
+bft-rs = { git = "https://github.com/cryptape/bft-rs.git", branch = "bft_for_cita" }
 
 [build-dependencies]
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
