@@ -228,7 +228,7 @@ impl Processor {
 
                     self.p2b
                         .check_block
-                        .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp{
+                        .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp {
                             is_pass: verify_resp.get_pass(),
                             round: *req_round,
                         })))
@@ -288,7 +288,14 @@ impl Processor {
                 self.try_feed_bft(height)?;
             }
 
-            BridgeMsg::CheckBlockReq(block, block_hash, signed_proposal_hash, height, round, _proposer) => {
+            BridgeMsg::CheckBlockReq(
+                block,
+                block_hash,
+                signed_proposal_hash,
+                height,
+                round,
+                _proposer,
+            ) => {
                 if let Err(err) = self.check_block(&block, &block_hash, height) {
                     self.p2b
                         .check_block
@@ -308,7 +315,7 @@ impl Processor {
                 if tx_hashes.is_empty() {
                     self.p2b
                         .check_block
-                        .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp{
+                        .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp {
                             is_pass: true,
                             round,
                         })))
