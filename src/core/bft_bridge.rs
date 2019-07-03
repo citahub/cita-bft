@@ -49,7 +49,7 @@ pub enum BridgeMsg {
     Transmit(BftMsg),
     CommitReq(Commit),
     CommitResp(Result<Status, BridgeError>),
-    GetBlockReq(Height),
+    GetBlockReq(Height, Proof),
     GetBlockResp(Result<(BftBlock, BftHash), BridgeError>),
     SignReq(BftHash),
     SignResp(Result<BftSig, BridgeError>),
@@ -283,7 +283,8 @@ impl Processor {
 
     fn process_bridge_msg(&mut self, bridge_msg: BridgeMsg) -> Result<(), BftError> {
         match bridge_msg {
-            BridgeMsg::GetBlockReq(height) => {
+            BridgeMsg::GetBlockReq(height, proof) => {
+                self.proof.entry(proof.height).or_insert_with(|| proof);
                 self.get_block_reqs.push_back(height);
                 self.try_feed_bft(height)?;
             }
@@ -811,10 +812,12 @@ impl BftSupport for BftBridge {
             })
     }
 
-    fn get_block(&self, height: Height) -> Result<(BftBlock, BftHash), BridgeError> {
-        self.b2p.send(BridgeMsg::GetBlockReq(height)).map_err(|e| {
-            BridgeError::SendMsgFailed(format!("{:?} of get_block_req to processor", e))
-        })?;
+    fn get_block(&self, height: Height, proof: &Proof) -> Result<(BftBlock, BftHash), BridgeError> {
+        self.b2p
+            .send(BridgeMsg::GetBlockReq(height, proof.clone()))
+            .map_err(|e| {
+                BridgeError::SendMsgFailed(format!("{:?} of get_block_req to processor", e))
+            })?;
         self.b4p_f
             .recv()
             .map_err(|e| {
