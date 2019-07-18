@@ -9,27 +9,29 @@ dotenv = "0.13.0"
 serde = "1.0"
 serde_derive = "1.0"
 bincode = "0.8.0"
+
 cita-logger = "0.1.1"
-libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
-util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+cita-logger = "0.1.0"
+libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
 clap = "2"
-pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
-cita-types = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
-cita-crypto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
-hashable = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
-cita-directories = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
-proof = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+cita-types = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+cita-crypto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+hashable = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+cita-directories = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+proof = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
 time = "0.1.36"
-engine = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+engine = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
 lru-cache = "0.1"
 cpuprofiler = "0.0.3"
-authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
 rustc-hex = "1.0"
 ntp = "0.4.0"
 min-max-heap = "1.2.2"
 
 [build-dependencies]
-util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
 
 
 [features]
