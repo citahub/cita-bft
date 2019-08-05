@@ -12,26 +12,26 @@ bincode = "0.8.0"
 
 cita-logger = "0.1.1"
 cita-logger = "0.1.0"
-libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
-util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 clap = "2"
-pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
-cita-types = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
-cita-crypto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
-hashable = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
-cita-directories = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
-proof = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+cita-types = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+cita-crypto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+hashable = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+cita-directories = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+proof = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 time = "0.1.36"
-engine = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+engine = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 lru-cache = "0.1"
 cpuprofiler = "0.0.3"
-authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 rustc-hex = "1.0"
 ntp = "0.4.0"
 min-max-heap = "1.2.2"
 
 [build-dependencies]
-util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-db" }
+util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 
 
 [features]
