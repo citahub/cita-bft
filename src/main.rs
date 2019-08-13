@@ -59,7 +59,7 @@ extern crate min_max_heap;
 #[macro_use]
 extern crate libproto;
 #[macro_use]
-extern crate logger;
+extern crate cita_logger as logger;
 extern crate lru_cache;
 extern crate proof;
 extern crate pubsub;
@@ -140,18 +140,16 @@ fn main() {
         let (p2b_c, b4p_c) = channel::unbounded();
         let (p2b_f, b4p_f) = channel::unbounded();
         let (p2b_s, b4p_s) = channel::unbounded();
-        let (p2b_t, b4p_t) = channel::unbounded();
         let p2b = P2B {
             check_block: p2b_b,
             commit: p2b_c,
             get_block: p2b_f,
             sign: p2b_s,
-            check_txs: p2b_t,
         };
 
         let wal_path = DataPath::wal_path();
 
-        let bridge = BftBridge::new(b2p, b4p_b, b4p_c, b4p_f, b4p_s, b4p_t);
+        let bridge = BftBridge::new(b2p, b4p_b, b4p_c, b4p_f, b4p_s);
         trace!("Bft bridge initialized!");
         let bft_actuator =
             BftActuator::new(Arc::new(bridge), signer.address.to_vec().into(), &wal_path);
