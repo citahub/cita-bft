@@ -1,4 +1,3 @@
-use crate::core::params::PrivateKey;
 use crate::types::H256;
 use bft::{
     get_proposal_hash, Address as BftAddr, BftActuator, BftMsg, Block as BftBlock, Commit,
@@ -19,7 +18,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::core::{
     handle_error, to_bft_proof, to_cita_proof, BftClient, BftError, BridgeError, BridgeMsg,
-    RabbitMqAgent,
+    PrivateKey, RabbitMqAgent,
 };
 use engine::{unix_now, AsMillis};
 
