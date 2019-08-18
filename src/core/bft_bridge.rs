@@ -33,14 +33,13 @@ use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, auth::VerifyBlockResp, Message, Origin, TryFrom, TryInto, ZERO_ORIGIN};
 use lru_cache::LruCache;
 use proof::BftProof;
-use pubsub::channel::{select, Receiver, RecvError, Sender};
+use pubsub::channel::{select, RecvError};
 use std::collections::{HashMap, VecDeque};
 
+use crate::core::agent::{BftClient, BftServer, RabbitMqAgent};
 use engine::{unix_now, AsMillis};
 
 pub const ORIGIN_N: usize = 100;
-
-pub type PubType = (String, Vec<u8>);
 
 #[derive(Debug)]
 pub enum BridgeMsg {
@@ -55,18 +54,9 @@ pub enum BridgeMsg {
     SignResp(Result<BftSig, BridgeError>),
 }
 
-pub struct P2B {
-    pub check_block: Sender<BridgeMsg>,
-    pub commit: Sender<BridgeMsg>,
-    pub get_block: Sender<BridgeMsg>,
-    pub sign: Sender<BridgeMsg>,
-}
-
 pub struct Processor {
-    p2b: P2B,
-    p2r: Sender<PubType>,
-    p4b: Receiver<BridgeMsg>,
-    p4r: Receiver<PubType>,
+    bft_client: BftClient,
+    rabbitmq_agent: RabbitMqAgent,
     bft_actuator: BftActuator,
 
     signer: PrivateKey,
@@ -94,8 +84,8 @@ impl Processor {
             let mut get_bridge_msg = Err(RecvError);
 
             select! {
-                recv(self.p4r) -> msg => get_rab_msg = msg,
-                recv(self.p4b) -> msg => get_bridge_msg = msg,
+                recv(self.rabbitmq_agent.receiver) -> msg => get_rab_msg = msg,
+                recv(self.bft_client.receiver) -> msg => get_bridge_msg = msg,
             }
 
             let mut result = Ok(());
@@ -161,7 +151,7 @@ impl Processor {
                 while front_h.is_some() {
                     let req_height = *front_h.unwrap();
                     if req_height == status_height {
-                        self.p2b
+                        self.bft_client
                             .commit
                             .send(BridgeMsg::CommitResp(Ok(status.clone())))
                             .map_err(|e| {
@@ -229,7 +219,7 @@ impl Processor {
                             ))
                         })?;
 
-                    self.p2b
+                    self.bft_client
                         .check_block
                         .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp {
                             is_pass: verify_resp.get_pass(),
@@ -301,7 +291,7 @@ impl Processor {
                 _proposer,
             ) => {
                 if let Err(err) = self.check_block(&block, &block_hash, height) {
-                    self.p2b
+                    self.bft_client
                         .check_block
                         .send(BridgeMsg::CheckBlockResp(Err(err)))
                         .map_err(|e| {
@@ -317,7 +307,7 @@ impl Processor {
                 let tx_hashes = compact_block.get_body().transaction_hashes();
 
                 if tx_hashes.is_empty() {
-                    self.p2b
+                    self.bft_client
                         .check_block
                         .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp {
                             is_pass: true,
@@ -332,7 +322,8 @@ impl Processor {
                 } else {
                     let msg =
                         self.get_block_req_msg(compact_block, &signed_proposal_hash, height, round);
-                    self.p2r
+                    self.rabbitmq_agent
+                        .sender
                         .send((
                             routing_key!(Consensus >> VerifyBlockReq).into(),
                             msg.clone().try_into().map_err(|e| {
@@ -345,7 +336,7 @@ impl Processor {
             }
 
             BridgeMsg::SignReq(hash) => {
-                self.p2b
+                self.bft_client
                     .sign
                     .send(BridgeMsg::SignResp(self.sign(&hash)))
                     .map_err(|e| {
@@ -368,20 +359,16 @@ impl Processor {
     }
 
     pub fn new(
-        p2b: P2B,
-        p2r: Sender<PubType>,
-        p4b: Receiver<BridgeMsg>,
-        p4r: Receiver<PubType>,
+        bft_client: BftClient,
+        rabbitmq_agent: RabbitMqAgent,
         bft_actuator: BftActuator,
         pk: PrivateKey,
     ) -> Self {
         let signer = Signer::from(pk.signer);
         let address = signer.address.to_vec();
         Processor {
-            p2b,
-            p2r,
-            p4b,
-            p4r,
+            bft_client,
+            rabbitmq_agent,
             bft_actuator,
             signer: pk,
             address: address.into(),
@@ -470,7 +457,8 @@ impl Processor {
             BftMsg::Proposal(encode) => {
                 trace!("Processor sends bft_signed_proposal{:?}", encode);
                 let msg: Message = encode.into();
-                self.p2r
+                self.rabbitmq_agent
+                    .sender
                     .send((
                         routing_key!(Consensus >> CompactSignedProposal).into(),
                         msg.try_into().map_err(|e| {
@@ -485,7 +473,8 @@ impl Processor {
             BftMsg::Vote(encode) => {
                 trace!("Processor sends bft_signed_vote{:?}", encode);
                 let msg: Message = encode.into();
-                self.p2r
+                self.rabbitmq_agent
+                    .sender
                     .send((
                         routing_key!(Consensus >> RawBytes).into(),
                         msg.try_into().map_err(|e| {
@@ -516,7 +505,8 @@ impl Processor {
         block_with_proof.set_proof(proof);
         trace!("Processor send {:?} to consensus", &block_with_proof);
         let msg: Message = block_with_proof.into();
-        self.p2r
+        self.rabbitmq_agent
+            .sender
             .send((
                 routing_key!(Consensus >> BlockWithProof).into(),
                 msg.try_into()
@@ -633,7 +623,7 @@ impl Processor {
 
     fn try_feed_bft(&self, height: Height) -> Result<(), BftError> {
         if let Some(block_txs) = self.get_block_resps.get(&height) {
-            self.p2b
+            self.bft_client
                 .get_block
                 .send(BridgeMsg::GetBlockResp(self.get_block(height, block_txs)))
                 .map_err(|e| {
@@ -659,7 +649,8 @@ impl Processor {
         let encode: Vec<u8> = (&msg)
             .try_into()
             .map_err(|e| BftError::TryIntoFailed(format!("{:?} of {:?}", e, msg)))?;
-        self.p2r
+        self.rabbitmq_agent
+            .sender
             .send((routing_key!(Consensus >> SnapshotResp).into(), encode))
             .map_err(|e| {
                 BftError::SendMsgFailed(format!("{:?} of snap_shot_resp to rabbitmq", e))
@@ -723,28 +714,12 @@ impl Processor {
 }
 
 pub struct BftBridge {
-    b2p: Sender<BridgeMsg>,
-    b4p_b: Receiver<BridgeMsg>,
-    b4p_c: Receiver<BridgeMsg>,
-    b4p_f: Receiver<BridgeMsg>,
-    b4p_s: Receiver<BridgeMsg>,
+    bft_server: BftServer,
 }
 
 impl BftBridge {
-    pub fn new(
-        b2p: Sender<BridgeMsg>,
-        b4p_b: Receiver<BridgeMsg>,
-        b4p_c: Receiver<BridgeMsg>,
-        b4p_f: Receiver<BridgeMsg>,
-        b4p_s: Receiver<BridgeMsg>,
-    ) -> Self {
-        BftBridge {
-            b2p,
-            b4p_b,
-            b4p_c,
-            b4p_f,
-            b4p_s,
-        }
+    pub fn new(bft_server: BftServer) -> Self {
+        BftBridge { bft_server }
     }
 }
 
@@ -759,7 +734,8 @@ impl BftSupport for BftBridge {
         _is_lock: bool,
         proposer: &BftAddr,
     ) -> Result<VerifyResp, BridgeError> {
-        self.b2p
+        self.bft_server
+            .sender
             .send(BridgeMsg::CheckBlockReq(
                 block.clone(),
                 block_hash.clone(),
@@ -771,7 +747,8 @@ impl BftSupport for BftBridge {
             .map_err(|e| {
                 BridgeError::SendMsgFailed(format!("{:?} of check_block_req to processor", e))
             })?;
-        self.b4p_b
+        self.bft_server
+            .check_block
             .recv()
             .map_err(|e| {
                 BridgeError::RcvMsgFailed(format!("{:?} of check_block_resp from processor", e))
@@ -789,16 +766,20 @@ impl BftSupport for BftBridge {
     }
     /// A funciton to transmit messages.
     fn transmit(&self, msg: BftMsg) {
-        if let Err(e) = self.b2p.send(BridgeMsg::Transmit(msg)) {
+        if let Err(e) = self.bft_server.sender.send(BridgeMsg::Transmit(msg)) {
             error!("transmit proposal/vote failed {:?}", e);
         }
     }
     /// A function to commit the proposal.
     fn commit(&self, commit: Commit) -> Result<Status, BridgeError> {
-        self.b2p.send(BridgeMsg::CommitReq(commit)).map_err(|e| {
-            BridgeError::SendMsgFailed(format!("{:?} of commit_req to processor", e))
-        })?;
-        self.b4p_c
+        self.bft_server
+            .sender
+            .send(BridgeMsg::CommitReq(commit))
+            .map_err(|e| {
+                BridgeError::SendMsgFailed(format!("{:?} of commit_req to processor", e))
+            })?;
+        self.bft_server
+            .commit
             .recv()
             .map_err(|e| {
                 BridgeError::RcvMsgFailed(format!("{:?} of commit_resp from processor", e))
@@ -816,12 +797,14 @@ impl BftSupport for BftBridge {
     }
 
     fn get_block(&self, height: Height, proof: &Proof) -> Result<(BftBlock, BftHash), BridgeError> {
-        self.b2p
+        self.bft_server
+            .sender
             .send(BridgeMsg::GetBlockReq(height, proof.clone()))
             .map_err(|e| {
                 BridgeError::SendMsgFailed(format!("{:?} of get_block_req to processor", e))
             })?;
-        self.b4p_f
+        self.bft_server
+            .get_block
             .recv()
             .map_err(|e| {
                 BridgeError::RcvMsgFailed(format!("{:?} of get_block_resp from processor", e))
@@ -839,10 +822,12 @@ impl BftSupport for BftBridge {
     }
 
     fn sign(&self, hash: &BftHash) -> Result<BftSig, BridgeError> {
-        self.b2p
+        self.bft_server
+            .sender
             .send(BridgeMsg::SignReq(hash.clone()))
             .map_err(|e| BridgeError::SendMsgFailed(format!("{:?} of sign_req to processor", e)))?;
-        self.b4p_s
+        self.bft_server
+            .sign
             .recv()
             .map_err(|e| BridgeError::RcvMsgFailed(format!("{:?} of sign_resp from processor", e)))
             .and_then(|bft_msg| {

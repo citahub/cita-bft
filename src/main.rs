@@ -73,16 +73,14 @@ extern crate util;
 use bft::BftActuator;
 use cita_directories::DataPath;
 use clap::App;
-use pubsub::channel;
 use std::sync::Arc;
 use std::thread;
 
 mod core;
-use crate::core::bft_bridge::{BftBridge, Processor, P2B};
+use crate::core::agent::{BftAgent, RabbitMqAgent};
+use crate::core::bft_bridge::{BftBridge, Processor};
 use crate::core::params::PrivateKey;
 use crate::crypto::Signer;
-use libproto::router::{MsgType, RoutingKey, SubModules};
-use pubsub::start_pubsub;
 use util::set_panic_handler;
 
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
@@ -110,49 +108,22 @@ fn main() {
 
     let mut pk_path = "privkey";
     if let Some(p) = matches.value_of("private") {
-        trace!("Value for config: {}", p);
         pk_path = p;
     }
-
-    // mq pubsub module
-    let (r2p, p4r) = channel::unbounded();
-    let (p2r, r4p) = channel::unbounded();
-    start_pubsub(
-        "consensus",
-        routing_key!([
-            Net >> CompactSignedProposal,
-            Net >> RawBytes,
-            Chain >> RichStatus,
-            Auth >> BlockTxs,
-            Auth >> VerifyBlockResp,
-            Snapshot >> SnapshotReq,
-        ]),
-        r2p,
-        r4p,
-    );
-
     let pk = PrivateKey::new(pk_path);
     let signer = Signer::from(pk.signer);
 
+    let rabbitmq_agent = RabbitMqAgent::new();
+
     let main_thd = thread::spawn(move || {
-        let (b2p, p4b) = channel::unbounded();
-        let (p2b_b, b4p_b) = channel::unbounded();
-        let (p2b_c, b4p_c) = channel::unbounded();
-        let (p2b_f, b4p_f) = channel::unbounded();
-        let (p2b_s, b4p_s) = channel::unbounded();
-        let p2b = P2B {
-            check_block: p2b_b,
-            commit: p2b_c,
-            get_block: p2b_f,
-            sign: p2b_s,
-        };
-
-        let wal_path = DataPath::wal_path();
-
-        let bridge = BftBridge::new(b2p, b4p_b, b4p_c, b4p_f, b4p_s);
-        let bft_actuator =
-            BftActuator::new(Arc::new(bridge), signer.address.to_vec().into(), &wal_path);
-        let mut processor = Processor::new(p2b, p2r, p4b, p4r, bft_actuator, pk);
+        let bft_agent = BftAgent::new();
+        let bridge = BftBridge::new(bft_agent.bft_server.clone());
+        let bft_actuator = BftActuator::new(
+            Arc::new(bridge),
+            signer.address.to_vec().into(),
+            &DataPath::wal_path(),
+        );
+        let mut processor = Processor::new(bft_agent.bft_client, rabbitmq_agent, bft_actuator, pk);
         processor.start();
     });
 
