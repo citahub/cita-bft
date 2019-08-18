@@ -1,32 +1,13 @@
-// CITA
-// Copyright 2016-2017 Cryptape Technologies LLC.
-
-// This program is free software: you can redistribute it
-// and/or modify it under the terms of the GNU General Public
-// License as published by the Free Software Foundation,
-// either version 3 of the License, or (at your option) any
-// later version.
-
-// This program is distributed in the hope that it will be
-// useful, but WITHOUT ANY WARRANTY; without even the implied
-// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-// PURPOSE. See the GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 use crate::core::params::PrivateKey;
-use crate::types::{Address, H256};
+use crate::types::H256;
 use bft::{
     get_proposal_hash, Address as BftAddr, BftActuator, BftMsg, BftSupport, Block as BftBlock,
     Commit, Hash as BftHash, Height, Node, Proof, Round, Signature as BftSig, Status, VerifyResp,
 };
-use bincode::{serialize, Infinite};
 use crypto::{pubkey_to_address, Sign, Signature, Signer, SIGNATURE_BYTES_LEN};
 use hashable::Hashable;
 use libproto::blockchain::{
-    Block, BlockTxs, BlockWithProof, CompactBlock, Proof as ProtoProof, ProofType, RichStatus,
-    SignedTransaction,
+    Block, BlockTxs, BlockWithProof, CompactBlock, RichStatus, SignedTransaction,
 };
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::snapshot::{Cmd, Resp, SnapshotResp};
@@ -36,7 +17,10 @@ use proof::BftProof;
 use pubsub::channel::{select, RecvError};
 use std::collections::{HashMap, VecDeque};
 
-use crate::core::{handle_error, BftClient, BftError, BftServer, BridgeError, RabbitMqAgent};
+use crate::core::{
+    handle_error, to_bft_proof, to_cita_proof, BftClient, BftError, BftServer, BridgeError,
+    RabbitMqAgent,
+};
 use engine::{unix_now, AsMillis};
 
 pub const ORIGIN_N: usize = 100;
@@ -861,38 +845,5 @@ impl BftSupport for BftBridge {
 
     fn crypt_hash(&self, msg: &[u8]) -> BftHash {
         msg.to_vec().crypt_hash().to_vec().into()
-    }
-}
-
-fn to_cita_proof(proof: &Proof) -> ProtoProof {
-    let commits: HashMap<Address, Signature> = proof
-        .precommit_votes
-        .iter()
-        .map(|(addr, sig)| (Address::from(&addr[..]), Signature::from(&sig[..])))
-        .collect();
-    let bft_proof = BftProof {
-        proposal: H256::from(&proof.block_hash[..]),
-        height: proof.height as usize,
-        round: proof.round as usize,
-        commits,
-    };
-    let mut proof = ProtoProof::new();
-    let encoded_proof: Vec<u8> = serialize(&bft_proof, Infinite).unwrap();
-    proof.set_content(encoded_proof);
-    proof.set_field_type(ProofType::Bft);
-    proof
-}
-
-fn to_bft_proof(proof: &BftProof) -> Proof {
-    let precommit_votes: HashMap<BftAddr, BftSig> = proof
-        .commits
-        .iter()
-        .map(|(addr, sig)| (addr.to_vec().into(), sig.0.to_vec().into()))
-        .collect();
-    Proof {
-        block_hash: proof.proposal.to_vec().into(),
-        height: proof.height as u64,
-        round: proof.round as u64,
-        precommit_votes,
     }
 }
