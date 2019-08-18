@@ -17,9 +17,12 @@
 
 pub mod agent;
 pub mod bft_bridge;
+pub mod error;
 pub mod params;
 
+pub use self::agent::{BftAgent, BftClient, BftServer, RabbitMqAgent};
 pub use self::bft_bridge::*;
-pub use self::params::*;
+pub use self::error::{handle_error, BftError, BridgeError};
+pub use self::params::PrivateKey;
 
 pub use libproto::blockchain::{Block, BlockBody, BlockHeader, Proof, Status, Transaction};

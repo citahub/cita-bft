@@ -77,9 +77,7 @@ use std::sync::Arc;
 use std::thread;
 
 mod core;
-use crate::core::agent::{BftAgent, RabbitMqAgent};
-use crate::core::bft_bridge::{BftBridge, Processor};
-use crate::core::params::PrivateKey;
+use crate::core::{BftAgent, BftBridge, PrivateKey, Processor, RabbitMqAgent};
 use crate::crypto::Signer;
 use util::set_panic_handler;
 

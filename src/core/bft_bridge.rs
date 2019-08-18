@@ -36,7 +36,7 @@ use proof::BftProof;
 use pubsub::channel::{select, RecvError};
 use std::collections::{HashMap, VecDeque};
 
-use crate::core::agent::{BftClient, BftServer, RabbitMqAgent};
+use crate::core::{handle_error, BftClient, BftError, BftServer, BridgeError, RabbitMqAgent};
 use engine::{unix_now, AsMillis};
 
 pub const ORIGIN_N: usize = 100;
@@ -894,49 +894,5 @@ fn to_bft_proof(proof: &BftProof) -> Proof {
         height: proof.height as u64,
         round: proof.round as u64,
         precommit_votes,
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum BridgeError {
-    CheckBlockFailed(String),
-    GetBlockFailed(String),
-    SignFailed(String),
-    CheckSigFailed(String),
-    SendMsgFailed(String),
-    RcvMsgFailed(String),
-    TryIntoFailed(String),
-    TryFromFailed(String),
-    MismatchType(String),
-}
-
-#[derive(Clone, Debug)]
-pub enum BftError {
-    SendMsgFailed(String),
-    TryFromFailed(String),
-    TakeRawBytesFailed(String),
-    TakeRichStatusFailed,
-    TakeBlockFailed,
-    TakeVerifyBlockRespFailed,
-    TakeSnapshotReqFailed,
-    NotYetGetResp(String),
-    TryIntoFailed(String),
-}
-
-fn handle_error(result: Result<(), BftError>) {
-    if let Err(e) = result {
-        match e {
-            BftError::TryFromFailed(_)
-            | BftError::TakeRawBytesFailed(_)
-            | BftError::TakeRichStatusFailed
-            | BftError::TakeBlockFailed
-            | BftError::TakeVerifyBlockRespFailed
-            | BftError::TakeSnapshotReqFailed
-            | BftError::NotYetGetResp(_) => warn!("Bft encounters {:?}", e),
-
-            BftError::SendMsgFailed(_) | BftError::TryIntoFailed(_) => {
-                error!("Bft encounters {:?}", e)
-            }
-        }
     }
 }
