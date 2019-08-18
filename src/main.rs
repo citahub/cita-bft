@@ -150,12 +150,9 @@ fn main() {
         let wal_path = DataPath::wal_path();
 
         let bridge = BftBridge::new(b2p, b4p_b, b4p_c, b4p_f, b4p_s);
-        trace!("Bft bridge initialized!");
         let bft_actuator =
             BftActuator::new(Arc::new(bridge), signer.address.to_vec().into(), &wal_path);
-        trace!("Bft actuator initialized!");
         let mut processor = Processor::new(p2b, p2r, p4b, p4r, bft_actuator, pk);
-        trace!("Processor initialized!");
         processor.start();
     });
 

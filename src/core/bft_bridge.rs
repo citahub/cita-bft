@@ -189,13 +189,16 @@ impl Processor {
 
             routing_key!(Auth >> BlockTxs) => {
                 let block_txs = msg.take_block_txs().ok_or(BftError::TakeBlockFailed)?;
+                let height = block_txs.get_height() + 1;
                 self.get_block_resps
-                    .entry(block_txs.get_height() + 1)
+                    .entry(height)
                     .or_insert_with(|| block_txs);
 
                 let mut front_h = self.get_block_reqs.pop_front();
                 while front_h.is_some() {
-                    self.try_feed_bft(front_h.unwrap())?;
+                    if front_h.unwrap() == height {
+                        self.try_feed_bft(height)?;
+                    }
                     front_h = self.get_block_reqs.pop_front();
                 }
             }
@@ -563,14 +566,15 @@ impl Processor {
             .set_transactions_root(transactions_root.to_vec());
         block.mut_header().set_proposer(self.address.to_vec());
         let blk: CompactBlock = block.clone().compact();
-        trace!("Processor get block {:?}", &blk);
 
-        let block_hash = blk.crypt_hash().to_vec();
+        let block_hash: BftHash = blk.crypt_hash().to_vec().into();
+        trace!("Processor get block {:?} with hash {:?}", &blk, block_hash);
+
         let encode: Vec<u8> = blk
             .try_into()
             .map_err(|e| BridgeError::TryIntoFailed(format!("{:?} of CompactBlock", e)))?;
 
-        Ok((encode.into(), block_hash.into()))
+        Ok((encode.into(), block_hash))
     }
 
     fn sign(&self, hash: &[u8]) -> Result<BftSig, BridgeError> {
