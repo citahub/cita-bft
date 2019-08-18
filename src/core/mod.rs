@@ -19,12 +19,14 @@ pub mod agent;
 pub mod bft_bridge;
 pub mod error;
 pub mod params;
+pub mod processor;
 pub mod util;
 
 pub use self::agent::{BftAgent, BftClient, BftServer, RabbitMqAgent};
-pub use self::bft_bridge::*;
+pub use self::bft_bridge::{BftBridge, BridgeMsg};
 pub use self::error::{handle_error, BftError, BridgeError};
 pub use self::params::PrivateKey;
+pub use self::processor::Processor;
 pub use self::util::{to_bft_proof, to_cita_proof};
 
 pub use libproto::blockchain::{Block, BlockBody, BlockHeader, Proof, Status, Transaction};

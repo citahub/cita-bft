@@ -1,0 +1,685 @@
+use crate::core::params::PrivateKey;
+use crate::types::H256;
+use bft::{
+    get_proposal_hash, Address as BftAddr, BftActuator, BftMsg, Block as BftBlock, Commit,
+    Hash as BftHash, Height, Node, Proof, Round, Signature as BftSig, Status, VerifyResp,
+};
+use crypto::{Sign, Signature, Signer};
+use hashable::Hashable;
+use libproto::blockchain::{
+    Block, BlockTxs, BlockWithProof, CompactBlock, RichStatus, SignedTransaction,
+};
+use libproto::router::{MsgType, RoutingKey, SubModules};
+use libproto::snapshot::{Cmd, Resp, SnapshotResp};
+use libproto::{auth, auth::VerifyBlockResp, Message, Origin, TryFrom, TryInto, ZERO_ORIGIN};
+use lru_cache::LruCache;
+use proof::BftProof;
+use pubsub::channel::{select, RecvError};
+use std::collections::{HashMap, VecDeque};
+
+use crate::core::{
+    handle_error, to_bft_proof, to_cita_proof, BftClient, BftError, BridgeError, BridgeMsg,
+    RabbitMqAgent,
+};
+use engine::{unix_now, AsMillis};
+
+pub const ORIGIN_N: usize = 100;
+
+pub struct Processor {
+    bft_client: BftClient,
+    rabbitmq_agent: RabbitMqAgent,
+    bft_actuator: BftActuator,
+
+    signer: PrivateKey,
+    address: BftAddr,
+
+    proof: HashMap<Height, Proof>,
+    pre_hash: HashMap<Height, H256>,
+    version: HashMap<Height, u32>,
+
+    get_block_reqs: VecDeque<Height>,
+    check_tx_reqs: VecDeque<(Height, Round)>,
+    commit_reqs: VecDeque<Height>,
+
+    get_block_resps: HashMap<Height, BlockTxs>,
+    check_tx_resps: HashMap<(Height, Round), VerifyBlockResp>,
+    verified_txs: HashMap<Height, HashMap<H256, SignedTransaction>>,
+
+    origins: LruCache<BftHash, Origin>,
+}
+
+impl Processor {
+    pub fn start(&mut self) {
+        loop {
+            let mut get_rab_msg = Err(RecvError);
+            let mut get_bridge_msg = Err(RecvError);
+
+            select! {
+                recv(self.rabbitmq_agent.receiver) -> msg => get_rab_msg = msg,
+                recv(self.bft_client.receiver) -> msg => get_bridge_msg = msg,
+            }
+
+            let mut result = Ok(());
+
+            if let Ok((key, body)) = get_rab_msg {
+                result = self.process_rab_msg(key, body);
+            }
+
+            if let Ok(bridge_msg) = get_bridge_msg {
+                result = self.process_bridge_msg(bridge_msg);
+            }
+
+            handle_error(result);
+        }
+    }
+
+    fn process_rab_msg(&mut self, key: String, body: Vec<u8>) -> Result<(), BftError> {
+        let rt_key = RoutingKey::from(&key);
+        let mut msg = Message::try_from(&body[..])
+            .map_err(|e| BftError::TryFromFailed(format!("{:?} of Message", e)))?;
+        match rt_key {
+            routing_key!(Net >> CompactSignedProposal) => {
+                let encode = msg.take_raw_bytes().ok_or_else(|| {
+                    BftError::TakeRawBytesFailed("of signed_proposal".to_string())
+                })?;
+
+                if let Some(signed_proposal_hash) =
+                    get_proposal_hash(&encode, |msg: &[u8]| -> BftHash {
+                        msg.to_vec().crypt_hash().to_vec().into()
+                    })
+                {
+                    let origin = msg.get_origin();
+                    self.origins.insert(signed_proposal_hash, origin);
+                }
+                self.bft_actuator
+                    .send(BftMsg::Proposal(encode))
+                    .map_err(|e| {
+                        BftError::SendMsgFailed(format!(
+                            "{:?} of signed_proposal to bft_actuator",
+                            e
+                        ))
+                    })?;
+            }
+
+            routing_key!(Net >> RawBytes) => {
+                let encode = msg
+                    .take_raw_bytes()
+                    .ok_or_else(|| BftError::TakeRawBytesFailed("of signed_vote".to_string()))?;
+                self.bft_actuator.send(BftMsg::Vote(encode)).map_err(|e| {
+                    BftError::SendMsgFailed(format!("{:?} of signed_vote to bft_actuator", e))
+                })?;
+            }
+
+            routing_key!(Chain >> RichStatus) => {
+                let rich_status = msg
+                    .take_rich_status()
+                    .ok_or(BftError::TakeRichStatusFailed)?;
+                let status = self.extract_status(rich_status);
+                let status_height = status.height;
+
+                let mut flag = true;
+                let mut front_h = self.commit_reqs.front();
+                while front_h.is_some() {
+                    let req_height = *front_h.unwrap();
+                    if req_height == status_height {
+                        self.bft_client
+                            .commit
+                            .send(BridgeMsg::CommitResp(Ok(status.clone())))
+                            .map_err(|e| {
+                                BftError::SendMsgFailed(format!(
+                                    "{:?} of commit_resp to bft_bridge",
+                                    e
+                                ))
+                            })?;
+                        flag = false;
+                    }
+                    if req_height > status_height {
+                        break;
+                    }
+                    self.commit_reqs.pop_front();
+                    front_h = self.commit_reqs.front();
+                }
+                if flag {
+                    self.bft_actuator
+                        .send(BftMsg::Status(status))
+                        .map_err(|e| {
+                            BftError::SendMsgFailed(format!("{:?} of status to bft_actuator", e))
+                        })?;
+                }
+            }
+
+            routing_key!(Auth >> BlockTxs) => {
+                let block_txs = msg.take_block_txs().ok_or(BftError::TakeBlockFailed)?;
+                let height = block_txs.get_height() + 1;
+                self.get_block_resps
+                    .entry(height)
+                    .or_insert_with(|| block_txs);
+
+                let mut front_h = self.get_block_reqs.pop_front();
+                while front_h.is_some() {
+                    if front_h.unwrap() == height {
+                        self.try_feed_bft(height)?;
+                    }
+                    front_h = self.get_block_reqs.pop_front();
+                }
+            }
+
+            routing_key!(Auth >> VerifyBlockResp) => {
+                let resp = msg
+                    .take_verify_block_resp()
+                    .ok_or(BftError::TakeVerifyBlockRespFailed)?;
+                let height = resp.get_height();
+                let round = resp.get_round();
+                self.check_tx_resps
+                    .entry((height, round))
+                    .or_insert_with(|| resp.clone());
+                let block = resp.get_block();
+                self.insert_verified_txs(height, block);
+
+                let mut front_h_r = self.check_tx_reqs.front();
+                while front_h_r.is_some() {
+                    let (req_height, req_round) = front_h_r.unwrap();
+
+                    let verify_resp = self
+                        .check_tx_resps
+                        .get(&(*req_height, *req_round))
+                        .ok_or_else(|| {
+                            BftError::NotYetGetResp(format!(
+                                "of check_tx_resps with height {}, round {}",
+                                req_height, req_round
+                            ))
+                        })?;
+
+                    self.bft_client
+                        .check_block
+                        .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp {
+                            is_pass: verify_resp.get_pass(),
+                            round: *req_round,
+                        })))
+                        .map_err(|e| {
+                            BftError::SendMsgFailed(format!("{:?} of verify_resp to bft_bridge", e))
+                        })?;
+                    self.check_tx_reqs.pop_front();
+
+                    front_h_r = self.check_tx_reqs.front();
+                }
+            }
+
+            routing_key!(Snapshot >> SnapshotReq) => {
+                let req = msg
+                    .take_snapshot_req()
+                    .ok_or(BftError::TakeSnapshotReqFailed)?;
+                match req.cmd {
+                    Cmd::Snapshot => {
+                        info!("Processor receives Snapshot::Snapshot: {:?}", req);
+                        self.snapshot_response(Resp::SnapshotAck, true)?;
+                    }
+                    Cmd::Begin => {
+                        info!("Processor receives Snapshot::Begin: {:?}", req);
+                        self.bft_actuator.send(BftMsg::Pause).map_err(|e| {
+                            BftError::SendMsgFailed(format!("{:?} of pause to bft_actuator", e))
+                        })?;
+                        self.snapshot_response(Resp::BeginAck, true)?;
+                    }
+                    Cmd::Restore => {
+                        info!("Processor receives Snapshot::Restore: {:?}", req);
+                        self.snapshot_response(Resp::RestoreAck, true)?;
+                    }
+                    Cmd::Clear => {
+                        info!("Processor receives Snapshot::Clear: {:?}", req);
+                        self.snapshot_response(Resp::ClearAck, true)?;
+                    }
+                    Cmd::End => {
+                        info!("Processor receives Snapshot::End: {:?}", req);
+                        let proof = to_bft_proof(&BftProof::from(req.get_proof().clone()));
+                        self.bft_actuator.send(BftMsg::Clear(proof)).map_err(|e| {
+                            BftError::SendMsgFailed(format!("{:?} of clear to bft_actuator", e))
+                        })?;
+                        self.snapshot_response(Resp::EndAck, true)?;
+                    }
+                }
+            }
+
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn process_bridge_msg(&mut self, bridge_msg: BridgeMsg) -> Result<(), BftError> {
+        match bridge_msg {
+            BridgeMsg::GetBlockReq(height, proof) => {
+                self.proof.entry(proof.height).or_insert_with(|| proof);
+                self.get_block_reqs.push_back(height);
+                self.try_feed_bft(height)?;
+            }
+
+            BridgeMsg::CheckBlockReq(
+                block,
+                block_hash,
+                signed_proposal_hash,
+                height,
+                round,
+                _proposer,
+            ) => {
+                if let Err(err) = self.check_block(&block, &block_hash, height) {
+                    self.bft_client
+                        .check_block
+                        .send(BridgeMsg::CheckBlockResp(Err(err)))
+                        .map_err(|e| {
+                            BftError::SendMsgFailed(format!(
+                                "{:?} of check_block_resp to bft_bridge",
+                                e
+                            ))
+                        })?;
+                }
+
+                let compact_block = CompactBlock::try_from(block.as_slice())
+                    .map_err(|e| BftError::TryFromFailed(format!("{:?} of CompactBlock", e)))?;
+                let tx_hashes = compact_block.get_body().transaction_hashes();
+
+                if tx_hashes.is_empty() {
+                    self.bft_client
+                        .check_block
+                        .send(BridgeMsg::CheckBlockResp(Ok(VerifyResp {
+                            is_pass: true,
+                            round,
+                        })))
+                        .map_err(|e| {
+                            BftError::SendMsgFailed(format!(
+                                "{:?} of check_block_resp to bft_bridge",
+                                e
+                            ))
+                        })?;
+                } else {
+                    let msg =
+                        self.get_block_req_msg(compact_block, &signed_proposal_hash, height, round);
+                    self.rabbitmq_agent
+                        .sender
+                        .send((
+                            routing_key!(Consensus >> VerifyBlockReq).into(),
+                            msg.clone().try_into().map_err(|e| {
+                                BftError::TryIntoFailed(format!("{:?} of VerifyBlockReq", e))
+                            })?,
+                        ))
+                        .unwrap();
+                    self.check_tx_reqs.push_back((height, round));
+                }
+            }
+
+            BridgeMsg::SignReq(hash) => {
+                self.bft_client
+                    .sign
+                    .send(BridgeMsg::SignResp(self.sign(&hash)))
+                    .map_err(|e| {
+                        BftError::SendMsgFailed(format!("{:?} of sign_resp to bft_bridge", e))
+                    })?;
+            }
+
+            BridgeMsg::Transmit(bft_msg) => {
+                self.transmit(bft_msg)?;
+            }
+
+            BridgeMsg::CommitReq(commit) => {
+                self.commit_reqs.push_back(commit.height);
+                self.commit(commit)?;
+            }
+
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub fn new(
+        bft_client: BftClient,
+        rabbitmq_agent: RabbitMqAgent,
+        bft_actuator: BftActuator,
+        pk: PrivateKey,
+    ) -> Self {
+        let signer = Signer::from(pk.signer);
+        let address = signer.address.to_vec();
+        Processor {
+            bft_client,
+            rabbitmq_agent,
+            bft_actuator,
+            signer: pk,
+            address: address.into(),
+            proof: HashMap::new(),
+            pre_hash: HashMap::new(),
+            version: HashMap::new(),
+            get_block_reqs: VecDeque::new(),
+            check_tx_reqs: VecDeque::new(),
+            commit_reqs: VecDeque::new(),
+            get_block_resps: HashMap::new(),
+            check_tx_resps: HashMap::new(),
+            verified_txs: HashMap::new(),
+            origins: LruCache::new(ORIGIN_N),
+        }
+    }
+
+    fn check_block(
+        &self,
+        block: &BftBlock,
+        block_hash: &BftHash,
+        height: Height,
+    ) -> Result<(), BridgeError> {
+        if height < 1 {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "block height {} is less than 1",
+                height
+            )));
+        }
+
+        let version = self.version.get(&(height - 1));
+        let pre_hash = self.pre_hash.get(&(height - 1));
+        if version.is_none() || pre_hash.is_none() {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "self.version {:?} or self.pre_hash {:?} is null",
+                version, pre_hash
+            )));
+        }
+
+        let compact_block = CompactBlock::try_from(block.as_slice())
+            .map_err(|e| BridgeError::TryFromFailed(format!("{:?} of CompactBlock", e)))?;
+        let blk_version = compact_block.get_version();
+        if version.unwrap() != &blk_version {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "block version {} != self.version {:?}",
+                blk_version, version
+            )));
+        }
+        let hash = compact_block.crypt_hash().to_vec();
+        if hash != block_hash.to_vec() {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "block hash {:?} != proposal's block_hash {:?}",
+                &hash, block_hash
+            )));
+        }
+
+        let header = compact_block.get_header();
+        if height != header.height {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "block height {} != proposal height {}",
+                header.height, height
+            )));
+        }
+
+        let blk_pre_hash = H256::from_slice(&header.prevhash);
+        if pre_hash.unwrap() != &blk_pre_hash {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "block pre_hash {:?} != self.pre_hash {:?}",
+                blk_pre_hash, pre_hash
+            )));
+        }
+
+        let transactions_root = compact_block.get_body().transactions_root().to_vec();
+        if header.transactions_root != transactions_root {
+            return Err(BridgeError::CheckBlockFailed(format!(
+                "header transactions_root {:?} != calculate result {:?} from body",
+                header.transactions_root, transactions_root
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// A funciton to transmit messages.
+    fn transmit(&self, msg: BftMsg) -> Result<(), BftError> {
+        match msg {
+            BftMsg::Proposal(encode) => {
+                trace!("Processor sends bft_signed_proposal{:?}", encode);
+                let msg: Message = encode.into();
+                self.rabbitmq_agent
+                    .sender
+                    .send((
+                        routing_key!(Consensus >> CompactSignedProposal).into(),
+                        msg.try_into().map_err(|e| {
+                            BftError::TryIntoFailed(format!("{:?} of RawBytes(signed_proposal)", e))
+                        })?,
+                    ))
+                    .map_err(|e| {
+                        BftError::SendMsgFailed(format!("{:?} of signed_proposal to rabbitmq", e))
+                    })?;
+            }
+
+            BftMsg::Vote(encode) => {
+                trace!("Processor sends bft_signed_vote{:?}", encode);
+                let msg: Message = encode.into();
+                self.rabbitmq_agent
+                    .sender
+                    .send((
+                        routing_key!(Consensus >> RawBytes).into(),
+                        msg.try_into().map_err(|e| {
+                            BftError::TryIntoFailed(format!("{:?} of RawBytes(signed_vote)", e))
+                        })?,
+                    ))
+                    .map_err(|e| {
+                        BftError::SendMsgFailed(format!("{:?} of signed_vote to rabbitmq", e))
+                    })?;
+            }
+
+            _ => warn!("Processor gets wrong msg type!"),
+        }
+
+        Ok(())
+    }
+
+    /// A function to commit the proposal.
+    fn commit(&mut self, commit: Commit) -> Result<(), BftError> {
+        trace!("Processor gets {:?}", commit);
+        let height = commit.height;
+        let proof = commit.proof;
+        self.proof.entry(height).or_insert_with(|| proof.clone());
+        let proof = to_cita_proof(&proof);
+        let block = self.complete_block(height, commit.block)?;
+        let mut block_with_proof = BlockWithProof::new();
+        block_with_proof.set_blk(block);
+        block_with_proof.set_proof(proof);
+        trace!("Processor send {:?} to consensus", &block_with_proof);
+        let msg: Message = block_with_proof.into();
+        self.rabbitmq_agent
+            .sender
+            .send((
+                routing_key!(Consensus >> BlockWithProof).into(),
+                msg.try_into()
+                    .map_err(|e| BftError::TryIntoFailed(format!("{:?} of BlockWithProof", e)))?,
+            ))
+            .map_err(|e| {
+                BftError::SendMsgFailed(format!("{:?} of block_with_proof to rabbitmq", e))
+            })?;
+        self.clean_cache(height - 1);
+        Ok(())
+    }
+
+    fn get_block(
+        &self,
+        height: Height,
+        block_txs: &BlockTxs,
+    ) -> Result<(BftBlock, BftHash), BridgeError> {
+        let version = self.version.get(&(height - 1));
+        let pre_hash = self.pre_hash.get(&(height - 1));
+        let mut proof = self.proof.get(&(height - 1));
+        let default_proof = Proof::default();
+        if height == 1 {
+            proof = Some(&default_proof);
+        }
+        if version.is_none() || pre_hash.is_none() || proof.is_none() {
+            return Err(BridgeError::GetBlockFailed(format!(
+                "any of version: {:?}, pre_hash: {:?}, proof: {:?} is none",
+                version, pre_hash, proof
+            )));
+        }
+        let mut block = Block::new();
+        block.set_version(*version.unwrap());
+        block.set_body(block_txs.clone().take_body());
+        block
+            .mut_header()
+            .set_prevhash(pre_hash.unwrap().0.to_vec());
+        let bft_proof = to_cita_proof(proof.unwrap());
+        block.mut_header().set_proof(bft_proof);
+        let block_time = unix_now();
+        block
+            .mut_header()
+            .set_timestamp(AsMillis::as_millis(&block_time));
+        block.mut_header().set_height(height);
+        let transactions_root = block.get_body().transactions_root();
+        block
+            .mut_header()
+            .set_transactions_root(transactions_root.to_vec());
+        block.mut_header().set_proposer(self.address.to_vec());
+        let blk: CompactBlock = block.clone().compact();
+
+        let block_hash: BftHash = blk.crypt_hash().to_vec().into();
+        trace!("Processor get block {:?} with hash {:?}", &blk, block_hash);
+
+        let encode: Vec<u8> = blk
+            .try_into()
+            .map_err(|e| BridgeError::TryIntoFailed(format!("{:?} of CompactBlock", e)))?;
+
+        Ok((encode.into(), block_hash))
+    }
+
+    fn sign(&self, hash: &[u8]) -> Result<BftSig, BridgeError> {
+        Signature::sign(&self.signer.signer, &H256::from(hash))
+            .and_then(|signature| Ok((&signature.0).to_vec().into()))
+            .map_err(|e| BridgeError::SignFailed(format!("{:?}", e)))
+    }
+
+    fn extract_status(&mut self, status: RichStatus) -> Status {
+        let height = status.height;
+
+        let pre_hash = H256::from_slice(&status.hash);
+        self.pre_hash.entry(height).or_insert(pre_hash);
+        self.version.entry(height).or_insert(status.version);
+
+        let mut map = HashMap::new();
+        status.get_nodes().iter().for_each(|node| {
+            let counter = map.entry(node.to_vec()).or_insert(0u32);
+            *counter += 1;
+        });
+
+        let authority_list: Vec<Node> = map
+            .into_iter()
+            .map(|(node, n)| Node {
+                address: node.into(),
+                proposal_weight: n,
+                vote_weight: 1,
+            })
+            .collect();
+        Status {
+            height,
+            interval: Some(status.interval),
+            authority_list,
+        }
+    }
+
+    fn get_block_req_msg(
+        &mut self,
+        compact_block: CompactBlock,
+        signed_proposal_hash: &BftHash,
+        height: Height,
+        round: Round,
+    ) -> Message {
+        let mut verify_req = auth::VerifyBlockReq::new();
+        verify_req.set_height(height);
+        verify_req.set_round(round);
+        verify_req.set_block(compact_block);
+        let mut msg: Message = verify_req.into();
+        if let Some(origin) = self.origins.get_mut(signed_proposal_hash) {
+            msg.set_origin(*origin);
+        } else {
+            msg.set_origin(ZERO_ORIGIN);
+        }
+        msg
+    }
+
+    fn try_feed_bft(&self, height: Height) -> Result<(), BftError> {
+        if let Some(block_txs) = self.get_block_resps.get(&height) {
+            self.bft_client
+                .get_block
+                .send(BridgeMsg::GetBlockResp(self.get_block(height, block_txs)))
+                .map_err(|e| {
+                    BftError::SendMsgFailed(format!("{:?} of get_block_resp to bft_bridge", e))
+                })?;
+            return Ok(());
+        }
+        Err(BftError::NotYetGetResp(format!(
+            "of feed with height {}",
+            height
+        )))
+    }
+
+    fn snapshot_response(&self, ack: Resp, flag: bool) -> Result<(), BftError> {
+        info!(
+            "Processor sends snapshot_response{{ack: {:?}, flag: {}}}",
+            ack, flag
+        );
+        let mut resp = SnapshotResp::new();
+        resp.set_resp(ack);
+        resp.set_flag(flag);
+        let msg: Message = resp.into();
+        let encode: Vec<u8> = (&msg)
+            .try_into()
+            .map_err(|e| BftError::TryIntoFailed(format!("{:?} of {:?}", e, msg)))?;
+        self.rabbitmq_agent
+            .sender
+            .send((routing_key!(Consensus >> SnapshotResp).into(), encode))
+            .map_err(|e| {
+                BftError::SendMsgFailed(format!("{:?} of snap_shot_resp to rabbitmq", e))
+            })?;
+
+        Ok(())
+    }
+
+    fn clean_cache(&mut self, height: Height) {
+        self.proof.retain(|&hi, _| hi >= height);
+        self.pre_hash.retain(|&hi, _| hi >= height);
+        self.version.retain(|&hi, _| hi >= height);
+        self.get_block_resps.retain(|&hi, _| hi >= height);
+        self.check_tx_resps.retain(|(hi, _), _| *hi >= height);
+        self.verified_txs.retain(|hi, _| *hi >= height);
+    }
+
+    fn insert_verified_txs(&mut self, height: Height, block: &Block) {
+        let txs = block.get_body().get_transactions();
+        if let Some(map) = self.verified_txs.get_mut(&height) {
+            for tx in txs {
+                let tx_hash = tx.crypt_hash();
+                map.entry(tx_hash).or_insert_with(|| tx.to_owned());
+            }
+        } else {
+            let mut map = HashMap::new();
+            for tx in txs {
+                let tx_hash = tx.crypt_hash();
+                map.insert(tx_hash, tx.to_owned());
+            }
+            self.verified_txs.insert(height, map);
+        }
+    }
+
+    fn complete_block(&mut self, height: Height, block: BftBlock) -> Result<Block, BftError> {
+        let compact_block = CompactBlock::try_from(block.as_slice())
+            .map_err(|e| BftError::TryFromFailed(format!("{:?} of CompactBlock", e)))?;
+        let tx_hashes = compact_block.get_body().transaction_hashes();
+        if tx_hashes.is_empty() {
+            return Ok(compact_block.complete(vec![]));
+        }
+
+        // verified_txs is empty when stop and restart node, so commit will failed
+        // it requires chain to send new status to bft-rs
+        let map = self.verified_txs.get(&height).ok_or_else(|| {
+            BftError::NotYetGetResp(format!("verified_txs of height {} is empty", height))
+        })?;
+        let mut signed_txs = Vec::new();
+        for tx_hash in tx_hashes {
+            let signed_tx = map.get(&tx_hash).ok_or_else(|| {
+                BftError::NotYetGetResp(format!(
+                    "verified_txs of tx_hash {} is not exist",
+                    &tx_hash
+                ))
+            })?;
+            signed_txs.push(signed_tx.to_owned());
+        }
+
+        Ok(compact_block.complete(signed_txs))
+    }
+}
