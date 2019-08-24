@@ -62,13 +62,11 @@ use std::thread;
 
 mod core;
 use crate::core::cita_bft::{Bft, BftTurn};
-use crate::core::params::{BftParams, Config, PrivateKey};
+use crate::core::params::{BftParams, PrivateKey};
 use crate::core::votetime::WaitTimer;
 use cpuprofiler::PROFILER;
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
-use std::thread::sleep;
-use std::time::Duration;
 use util::set_panic_handler;
 
 fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
@@ -112,15 +110,9 @@ fn main() {
     micro_service_init!("cita-bft", "CITA:consensus:cita-bft", stdout);
     info!("Version: {}", get_build_info_str(true));
 
-    let mut config_path = "consensus.toml";
-    if let Some(c) = matches.value_of("config") {
-        trace!("Value for config: {}", c);
-        config_path = c;
-    }
-
     let mut pk_path = "privkey";
     if let Some(p) = matches.value_of("private") {
-        trace!("Value for config: {}", p);
+        trace!("Value for private config: {}", p);
         pk_path = p;
     }
 
@@ -168,8 +160,6 @@ fn main() {
         tx.send(BftTurn::Message((key, body))).unwrap();
     });
 
-    let config = Config::new(config_path);
-
     let pk = PrivateKey::new(pk_path);
 
     // main cita-bft loop module
@@ -178,33 +168,6 @@ fn main() {
         let mut engine = Bft::new(tx_pub, main2timer, receiver, params);
         engine.start();
     });
-
-    // NTP service
-    let ntp_config = config.ntp_config.clone();
-    // Default
-    // let ntp_config = Ntp {
-    //     enabled: true,
-    //     threshold: 3000,
-    //     address: String::from("0.pool.ntp.org:123"),
-    // };
-    let mut log_tag: u8 = 0;
-
-    if ntp_config.enabled {
-        thread::spawn(move || loop {
-            if ntp_config.is_clock_offset_overflow() {
-                warn!("System clock seems off!!!");
-                log_tag += 1;
-                if log_tag == 10 {
-                    log_tag = 0;
-                    sleep(Duration::new(1000, 0));
-                }
-            } else {
-                log_tag = 0;
-            }
-
-            sleep(Duration::new(10, 0));
-        });
-    }
 
     profiler(flag_prof_start, flag_prof_duration);
 

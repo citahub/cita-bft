@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use super::ntp::Ntp;
 use crate::crypto::{PrivKey, Signer};
 use crate::types::clean_0x;
 use std::cell::Cell;
@@ -23,17 +22,6 @@ use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 use std::time::Duration;
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Config {
-    pub ntp_config: Ntp,
-}
-
-impl Config {
-    pub fn new(path: &str) -> Self {
-        parse_config!(Config, path)
-    }
-}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct PrivateKey {
