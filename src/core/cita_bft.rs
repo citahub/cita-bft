@@ -1023,9 +1023,17 @@ impl Bft {
                 );
                 if self.auth_manage.authority_h_old == height - 1 {
                     if !proof.check(height - 1, &self.auth_manage.validators_old) {
+                        warn!(
+                            "proof check error h {} validator old {:?}",
+                            height, self.auth_manage.validators_old,
+                        );
                         return false;
                     }
                 } else if !proof.check(height - 1, &self.auth_manage.validators) {
+                    warn!(
+                        "proof check error h {} validator {:?}",
+                        height, self.auth_manage.validators,
+                    );
                     return false;
                 }
 
@@ -1066,6 +1074,7 @@ impl Bft {
             }
             return true;
         }
+        warn!("proc_proposal not find proposal h {} r {}", height, round);
         false
     }
 
