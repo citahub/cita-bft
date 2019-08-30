@@ -28,7 +28,6 @@ lru-cache = "0.1"
 cpuprofiler = "0.0.3"
 authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 rustc-hex = "1.0"
-ntp = "0.4.0"
 min-max-heap = "1.2.2"
 
 [build-dependencies]
