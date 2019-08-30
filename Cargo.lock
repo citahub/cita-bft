@@ -236,7 +236,7 @@ dependencies = [
  "bincode 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cita-crypto 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "cita-directories 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
- "cita-logger 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cita-logger 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "cita-types 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "clap 2.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cpuprofiler 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -300,11 +300,11 @@ dependencies = [
 
 [[package]]
 name = "cita-logger"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "chrono 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "crossbeam-channel 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-channel 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.46 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "log4rs 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -431,11 +431,10 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.3.8"
+version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "crossbeam-utils 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "smallvec 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -550,7 +549,7 @@ source = "git+https://github.com/cryptape/cita-common.git?branch=develop#1256af8
 dependencies = [
  "cita-crypto 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "cita-types 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
- "crossbeam-channel 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-channel 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "libproto 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "util 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
 ]
@@ -1415,7 +1414,7 @@ name = "pubsub_kafka"
 version = "0.1.0"
 source = "git+https://github.com/cryptape/cita-common.git?branch=develop#1256af8130f9ef5df998e5c2c3635451bfa9a0e0"
 dependencies = [
- "crossbeam-channel 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-channel 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "logger 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
@@ -1428,7 +1427,7 @@ version = "0.1.0"
 source = "git+https://github.com/cryptape/cita-common.git?branch=develop#1256af8130f9ef5df998e5c2c3635451bfa9a0e0"
 dependencies = [
  "amqp 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "crossbeam-channel 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-channel 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1436,7 +1435,7 @@ name = "pubsub_zeromq"
 version = "0.1.0"
 source = "git+https://github.com/cryptape/cita-common.git?branch=develop#1256af8130f9ef5df998e5c2c3635451bfa9a0e0"
 dependencies = [
- "crossbeam-channel 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-channel 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "logger 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)",
  "zmq 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2410,7 +2409,7 @@ dependencies = [
 "checksum cita-crypto-trait 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-directories 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-ed25519 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
-"checksum cita-logger 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "5c0fccf6b33be6ab71808f2b5bb36206acef2eee9f5d0d29f87b81327242b521"
+"checksum cita-logger 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "3f28d41799c3ceeaa16c6aef432fbffb96722a270fe877696c09656cfead4e2b"
 "checksum cita-merklehash 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-secp256k1 0.6.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
 "checksum cita-sm2 0.1.0 (git+https://github.com/cryptape/cita-common.git?branch=develop)" = "<none>"
@@ -2422,7 +2421,7 @@ dependencies = [
 "checksum cpuprofiler 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "33f07976bb6821459632d7a18d97ccca005cb5c552f251f822c7c1781c1d7035"
 "checksum crossbeam 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)" = "24ce9782d4d5c53674646a6a4c1863a21a8fc0cb649b3c94dfc16e45071dea19"
 "checksum crossbeam-channel 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)" = "7b85741761b7f160bc5e7e0c14986ef685b7f8bf9b7ad081c60c604bb4649827"
-"checksum crossbeam-channel 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "0f0ed1a4de2235cabda8558ff5840bffb97fcb64c97827f354a451307df5f72b"
+"checksum crossbeam-channel 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)" = "c8ec7fcd21571dc78f96cc96243cab8d8f035247c3efd16c687be154c3fa9efa"
 "checksum crossbeam-deque 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)" = "3486aefc4c0487b9cb52372c97df0a48b8c249514af1ee99703bf70d2f2ceda1"
 "checksum crossbeam-epoch 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "30fecfcac6abfef8771151f8be4abc9e4edc112c2bcb233314cafde2680536e9"
 "checksum crossbeam-epoch 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)" = "2449aaa4ec7ef96e5fb24db16024b935df718e9ae1cec0a1e68feeca2efca7b8"
