@@ -12,7 +12,6 @@ serde_derive = "1.0"
 bincode = "0.8.0"
 
 cita-logger = "0.1.1"
-cita-logger = "0.1.0"
 libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
 clap = "2"
