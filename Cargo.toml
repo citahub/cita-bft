@@ -1,6 +1,6 @@
 [package]
 name = "cita-bft"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Cryptape Technologies <contact@cryptape.com>"]
 edition = "2018"
 
@@ -9,26 +9,26 @@ dotenv = "0.13.0"
 serde = "1.0"
 serde_derive = "1.0"
 bincode = "0.8.0"
-libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
-util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+libproto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 clap = "2"
-pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
-cita-types = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
-cita-crypto = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
-hashable = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
-cita-directories = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
-proof = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+pubsub = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+cita-types = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+cita-crypto = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+hashable = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+cita-directories = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
+proof = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 time = "0.1.36"
-engine = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+engine = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 lru-cache = "0.1"
 cita-logger = "0.1.0"
-authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+authority_manage = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 rustc-hex = "1.0"
 min-max-heap = "1.2.2"
 bft-rs = { git = "https://github.com/cryptape/bft-rs.git", branch = "bft_for_cita" }
 
 [build-dependencies]
-util = { git = "https://github.com/cryptape/cita-common.git", branch = "remove-gpl" }
+util = { git = "https://github.com/cryptape/cita-common.git", branch = "develop" }
 
 
 [features]
