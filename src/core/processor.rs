@@ -48,6 +48,7 @@ pub struct Processor {
 }
 
 impl Processor {
+    #[allow(clippy::drop_copy, clippy::zero_ptr)]
     pub fn start(&mut self) {
         loop {
             let mut get_rab_msg = Err(RecvError);
