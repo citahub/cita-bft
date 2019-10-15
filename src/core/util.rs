@@ -18,6 +18,7 @@ pub fn to_cita_proof(proof: &Proof) -> ProtoProof {
         round: proof.round as usize,
         commits,
     };
+    trace!("To cita proof {:?}", proof);
     let mut proof = ProtoProof::new();
     let encoded_proof: Vec<u8> = serialize(&bft_proof, Infinite).unwrap();
     proof.set_content(encoded_proof);

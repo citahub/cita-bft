@@ -80,6 +80,7 @@ impl BftSupport for BftBridge {
     }
     /// A function to commit the proposal.
     fn commit(&self, commit: Commit) -> Result<Status, BridgeError> {
+        trace!("Processor received commit from bft-rs, commit {:?}", commit);
         self.bft_server
             .sender
             .send(BridgeMsg::CommitReq(commit))

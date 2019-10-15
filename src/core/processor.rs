@@ -320,7 +320,9 @@ impl Processor {
             }
 
             BridgeMsg::CommitReq(commit) => {
+                trace!("Processor handle commit {:?}", commit);
                 self.commit_reqs.push_back(commit.height);
+                trace!("Processor's commit request now is {:?}", self.commit_reqs);
                 self.commit(commit)?;
             }
 
@@ -426,7 +428,7 @@ impl Processor {
     fn transmit(&self, msg: BftMsg) -> Result<(), BftError> {
         match msg {
             BftMsg::Proposal(encode) => {
-                trace!("Processor sends bft_signed_proposal{:?}", encode);
+                trace!("Processor sends bft_signed_proposal");
                 let msg: Message = encode.into();
                 self.rabbitmq_agent
                     .sender
@@ -442,7 +444,7 @@ impl Processor {
             }
 
             BftMsg::Vote(encode) => {
-                trace!("Processor sends bft_signed_vote{:?}", encode);
+                trace!("Processor sends bft_signed_vote");
                 let msg: Message = encode.into();
                 self.rabbitmq_agent
                     .sender
