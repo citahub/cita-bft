@@ -473,10 +473,14 @@ impl Processor {
         self.proof.entry(height).or_insert_with(|| proof.clone());
         let proof = to_cita_proof(&proof);
         let block = self.complete_block(height, commit.block)?;
+        trace!(
+            "Processor send block with proof, block {:?}, proof {:?}",
+            block,
+            proof
+        );
         let mut block_with_proof = BlockWithProof::new();
         block_with_proof.set_blk(block);
         block_with_proof.set_proof(proof);
-        trace!("Processor send {:?} to consensus", &block_with_proof);
         let msg: Message = block_with_proof.into();
         self.rabbitmq_agent
             .sender
