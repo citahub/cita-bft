@@ -457,9 +457,8 @@ impl Bft {
                             tv = Duration::new(0, 0);
                         } else {
                             let mut clean_flag = true;
-                            let op = self.proposals.get_proposal(height, round);
-                            if op.is_some() {
-                                let pro_block = CompactBlock::try_from(&op.unwrap().block);
+                            if let Some(op) = self.proposals.get_proposal(height, round) {
+                                let pro_block = CompactBlock::try_from(&op.block);
                                 if let Ok(block) = pro_block {
                                     let bhash: H256 = block.crypt_hash();
                                     if bhash == *hash {
