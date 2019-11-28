@@ -1,4 +1,4 @@
-// Copyright Cryptape Technologies LLC.
+// Copyright Rivtower Technologies LLC.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -87,12 +87,9 @@ impl WaitTimer {
                 Duration::from_secs(100)
             };
 
-            let set_time = self.timer_seter.recv_timeout(timeout);
-
             // put the timeval into a timerheap
             // put the TimeoutInfo into a hashmap, K: timeval  V: TimeoutInfo
-            if set_time.is_ok() {
-                let time_out = set_time.unwrap();
+            if let Ok(time_out) = self.timer_seter.recv_timeout(timeout) {
                 timer_heap.push(time_out);
             }
 
