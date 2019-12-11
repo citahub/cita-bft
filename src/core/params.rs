@@ -1,21 +1,17 @@
-// CITA
-// Copyright 2016-2017 Cryptape Technologies LLC.
+// Copyright Rivtower Technologies LLC.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-// This program is free software: you can redistribute it
-// and/or modify it under the terms of the GNU General Public
-// License as published by the Free Software Foundation,
-// either version 3 of the License, or (at your option) any
-// later version.
-
-// This program is distributed in the hope that it will be
-// useful, but WITHOUT ANY WARRANTY; without even the implied
-// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-// PURPOSE. See the GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-use super::ntp::Ntp;
 use crate::crypto::{PrivKey, Signer};
 use crate::types::clean_0x;
 use std::cell::Cell;
@@ -23,17 +19,6 @@ use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 use std::time::Duration;
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Config {
-    pub ntp_config: Ntp,
-}
-
-impl Config {
-    pub fn new(path: &str) -> Self {
-        parse_config!(Config, path)
-    }
-}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct PrivateKey {
@@ -47,7 +32,7 @@ impl PrivateKey {
             .and_then(|mut f| f.read_to_string(&mut buffer))
             .unwrap_or_else(|err| panic!("Error while loading PrivateKey: [{}]", err));
 
-        let signer = PrivKey::from_str(clean_0x(&buffer)).unwrap();
+        let signer = PrivKey::from_str(clean_0x(&buffer)).expect("Private key is wrong.");
 
         PrivateKey { signer }
     }

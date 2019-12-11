@@ -1,9 +1,9 @@
-# CITA-BFT for [CITA](https://github.com/cryptape/cita)
+# CITA-BFT for [CITA](https://github.com/citahub/cita)
 
-This is a part of the [CITA](https://github.com/cryptape/cita) project.
+This is a part of the [CITA](https://github.com/citahub/cita) project.
 
 More details can found there.
 
-## License
+## Licences
 
-Same as [CITA](https://github.com/cryptape/cita)
+  Apache License 2.0
