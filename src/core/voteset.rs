@@ -21,6 +21,41 @@ use libproto::blockchain::{Block, CompactBlock};
 use libproto::TryFrom;
 use lru_cache::LruCache;
 use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct IndexProposal {
+     current_proposals : BTreeMap<u32,Proposal>,
+}
+
+impl IndexProposal {
+    pub fn new() -> Self {
+        IndexProposal {
+            current_proposals:BTreeMap::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.current_proposals.clear();
+    }
+
+    // Be care of sequence
+    pub fn get_proposals(&self,idxs: Vec<u32>) -> Vec<Proposal> {
+        let o :Vec = self.current_proposals.iter().filter(|idx| idxs.contains(idx)).collect();
+        if o.len() == idxs.len() {
+            return o;
+        }
+        Vec::new()
+    }
+
+    pub fn add_proposal(&mut self,idx : u32,proposal:Proposal) -> bool {
+        if self.current_proposals.contains_key(&idx) {
+            return false;
+        }
+        self.current_proposals.insert(&idx,proposal);
+        true
+    }
+}
 
 // height -> round collector
 #[derive(Debug)]
@@ -194,38 +229,6 @@ pub struct VoteMessage {
     pub signature: Signature,
 }
 
-#[derive(Debug)]
-pub struct ProposalCollector {
-    pub proposals: LruCache<usize, ProposalRoundCollector>,
-}
-
-impl ProposalCollector {
-    pub fn new() -> Self {
-        ProposalCollector {
-            proposals: LruCache::new(16),
-        }
-    }
-
-    pub fn add(&mut self, height: usize, round: usize, proposal: Proposal) -> bool {
-        if self.proposals.contains_key(&height) {
-            self.proposals
-                .get_mut(&height)
-                .unwrap()
-                .add(round, proposal)
-        } else {
-            let mut round_proposals = ProposalRoundCollector::new();
-            round_proposals.add(round, proposal);
-            self.proposals.insert(height, round_proposals);
-            true
-        }
-    }
-
-    pub fn get_proposal(&mut self, height: usize, round: usize) -> Option<Proposal> {
-        self.proposals
-            .get_mut(&height)
-            .and_then(|prc| prc.get_proposal(round))
-    }
-}
 
 #[derive(Debug)]
 pub struct ProposalRoundCollector {

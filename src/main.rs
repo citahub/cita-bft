@@ -141,12 +141,11 @@ fn main() {
     start_pubsub(
         "consensus",
         routing_key!([
-            Net >> CompactSignedProposal,
+            Net >> SignedProposal,
             Net >> RawBytes,
             Chain >> RichStatus,
             Auth >> BlockTxs,
             Auth >> VerifyBlockResp,
-            Snapshot >> SnapshotReq,
         ]),
         tx_sub,
         rx_pub,

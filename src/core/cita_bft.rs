@@ -151,22 +151,21 @@ pub struct Bft {
     params: BftParams,
     height: usize,
     round: usize,
-    step: Step,
+
     proof: BftProof,
     pre_hash: Option<H256>,
     votes: VoteCollector,
-    proposals: ProposalCollector,
-    proposal: Option<H256>,
-    lock_round: Option<usize>,
-    locked_vote: Option<VoteSet>,
-    // lock_round set, locked block means itself,else means proposal's block
-    locked_block: Option<CompactBlock>,
+
+    current_proposals: IndexProposal,
+
+    height_proposals: BTreeMap<usize,Proposal>,
+
     wal_log: Wal,
     send_filter: HashMap<Address, (usize, Step, Instant)>,
-    last_commit_round: Option<usize>,
+
     htime: Instant,
     auth_manage: AuthorityManage,
-    consensus_power: bool,
+    is_consensus_node: bool,
     //params meaning: key :index 0->height,1->round ,value:0->verified msg,1->verified result
     unverified_msg: BTreeMap<(usize, usize), (Message, VerifiedBlockStatus)>,
     // VecDeque might work, Almost always it is better to use Vec or VecDeque instead of LinkedList
@@ -176,8 +175,7 @@ pub struct Bft {
     // The verified blocks with the bodies of transactions.
     verified_blocks: HashMap<H256, Block>,
 
-    // when snaphsot restore, clear wal data
-    is_snapshot: bool,
+    max_future_height: usize,
 
     // whether the datas above have been cleared.
     is_cleared: bool,
@@ -204,7 +202,7 @@ impl ::std::fmt::Debug for Bft {
             self.proposal,
             self.lock_round,
             self.last_commit_round,
-            self.consensus_power,
+            self.is_consensus_node,
             self.is_snapshot,
             self.is_cleared,
         )
@@ -239,66 +237,205 @@ impl Bft {
             params,
             height: 0,
             round: INIT_ROUND,
-            step: Step::Propose,
             proof,
             pre_hash: None,
             votes: VoteCollector::new(),
-            proposals: ProposalCollector::new(),
-            proposal: None,
-            lock_round: None,
-            locked_vote: None,
-            locked_block: None,
+
             wal_log: Wal::create(&*logpath).unwrap(),
             send_filter: HashMap::new(),
-            last_commit_round: None,
+
             htime: Instant::now(),
             auth_manage: AuthorityManage::new(),
-            consensus_power: false,
+            is_consensus_node: false,
             unverified_msg: BTreeMap::new(),
             block_txs: VecDeque::new(),
             block_proof: None,
             verified_blocks: HashMap::new(),
-            is_snapshot: false,
             is_cleared: false,
             version: None,
         }
     }
 
-    pub fn get_snapshot(&self) -> bool {
-        self.is_snapshot
-    }
-
-    pub fn set_snapshot(&mut self, b: bool) {
-        self.is_snapshot = b;
-    }
-
-    fn is_round_proposer(
-        &self,
-        height: usize,
-        round: usize,
-        address: &Address,
-    ) -> Result<(), EngineError> {
-        let p = &self.auth_manage;
-        if p.authorities.is_empty() {
+    pub fn get_validator_id(&self,address: &Address) -> Opiton<u32> {
+        if self.auth_manage.validators.is_empty() {
             warn!("There are no authorities");
-            return Err(EngineError::NotAuthorized(Address::zero()));
+            return None;
         }
-        let proposer_nonce = height + round;
-        let proposer: &Address = p
-            .authorities
-            .get(proposer_nonce % p.authorities.len())
-            .expect(
-                "There are validator_n() authorities; \
-                 taking number modulo validator_n() gives number in validator_n() range; qed",
-            );
-        if proposer == address {
-            Ok(())
+
+        for i in 0..self.auth_manage.validators.len() {
+            if self.auth_manage.validators[i] == address {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn add_proposal(&mut self,height :usize,round: u32,proposal:Proposal)->bool{
+        self.proposals.entry(height).or_insert(IndexProposal::new()).add_proposal(round as u32, proposal)
+    }
+
+    fn handle_proposal(&mut self,body: &[u8],) -> Result<(usize, usize), EngineError> {
+        let mut csp_msg = if let Ok(csp_msg) = Message::try_from(body) {
+            csp_msg
         } else {
-            Err(EngineError::NotProposer(Mismatch {
-                expected: *proposer,
-                found: *address,
-            }))
+            return Err(EngineError::UnexpectedMessage);
+        };
+        let result = csp_msg.clone().take_signed_proposal();
+        if let Some(signed_proposal) = result {
+            let signature = {
+                let signature = signed_proposal.get_signature();
+                if signature.len() != SIGNATURE_BYTES_LEN {
+                    return Err(EngineError::InvalidSignature);
+                }
+                Signature::from(signature)
+            };
+            let proposal = signed_proposal.get_proposal().clone();
+            let hash = {
+                let message: Vec<u8> = (&proposal).try_into().unwrap();
+                message.crypt_hash()
+            };
+            trace!("handle_proposal {} message {:?}", self, hash);
+            if let Ok(pubkey) = signature.recover(&hash) {
+                let height = proposal.get_height() as usize;
+                let round = proposal.get_round() as usize;
+                if height < self.height
+                    || (height == self.height && round < self.round)
+                {
+                    debug!("handle_proposal {} get old proposal", self);
+                    return Err(EngineError::VoteMsgDelay(height));
+                }
+
+                let address = pubkey_to_address(&pubkey);
+                trace!(
+                    "handle_proposal {} h: {}, r: {}, sender: {:?}",
+                    self,
+                    height,
+                    round,
+                    address
+                );
+
+                if let Some(idx) = self.get_validator_id() {
+                    if self.add_proposal(height,idx , proposal) {
+                        // proposal should be sent to auth to verify
+                        //let block = proposal.clone().take_block();
+                    }
+                }
+
+                if height > self.height {
+                    return Err(EngineError::VoteMsgForth(height));
+                }
+                return Ok((height, round));
+
+            }
         }
+        Err(EngineError::UnexpectedMessage)
+    }
+
+    fn handle_message(
+        &mut self,
+        message: &[u8],
+        wal_flag: bool,
+    ) -> Result<(usize, usize, Step), EngineError> {
+        let res = deserialize(&message[..]);
+        if let Ok(decoded) = res {
+            let (message, signature): (Vec<u8>, &[u8]) = decoded;
+            if signature.len() != SIGNATURE_BYTES_LEN {
+                return Err(EngineError::InvalidSignature);
+            }
+            let signature = Signature::from(signature);
+            if let Ok(pubkey) = signature.recover(&message.crypt_hash()) {
+                let decoded = deserialize(&message[..]).unwrap();
+                let (h, r, step, sender, hash) = decoded;
+                trace!(
+                    "handle_message {} parse over h: {}, r: {}, s: {}, sender: {:?}",
+                    self,
+                    h,
+                    r,
+                    step,
+                    sender,
+                );
+
+                if h < self.height {
+                    return Err(EngineError::UnexpectedMessage);
+                }
+
+                if self.is_validator(&sender) && pubkey_to_address(&pubkey) == sender {
+                    let mut trans_flag = false;
+                    let mut add_flag = false;
+                    let now = Instant::now();
+
+                    //deal with equal height,and round fall behind
+                    if h == self.height && r < self.round {
+                        let res = self.send_filter.get_mut(&sender);
+                        if let Some(val) = res {
+                            let (fround, fstep, ins) = *val;
+                            if r > fround || (fround == r && step > fstep) {
+                                add_flag = true;
+                                //for re_transe msg for lag node
+                                if r < self.round {
+                                    trans_flag = true;
+                                }
+                            } else if fround == r
+                                && step == fstep
+                                && now - ins
+                                > self.params.timer.get_prevote()
+                                * TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE
+                            {
+                                add_flag = true;
+                                trans_flag = true;
+                            }
+                        } else {
+                            add_flag = true;
+                        }
+                    }
+
+                    if add_flag {
+                        self.send_filter.insert(sender, (r, step, now));
+                    }
+                    if trans_flag {
+                        self.retrans_vote(h, r, step);
+                        return Err(EngineError::UnexpectedMessage);
+                    }
+
+                    /*bellow commit content is suit for when chain not syncing ,but consensus need
+                    process up */
+                    if h > self.height || (h == self.height && r >= self.round) {
+                        debug!(
+                            "handle_message get vote: \
+                             height {}, \
+                             round {}, \
+                             step {}, \
+                             sender {:?}, \
+                             hash {:?}, \
+                             signature {} ",
+                            h, r, step, sender, hash, signature
+                        );
+                        let ret = self.votes.add(
+                            h,
+                            r,
+                            step,
+                            sender,
+                            &VoteMessage {
+                                proposal: hash,
+                                signature,
+                            },
+                        );
+                        if ret {
+                            if wal_flag {
+                                self.wal_log.save(h, LogType::Vote, &log_msg).unwrap();
+                            }
+                            if h > self.height {
+                                return Err(EngineError::VoteMsgForth(h));
+                            }
+                            return Ok((h, r, step));
+                        }
+
+                        return Err(EngineError::DoubleVote(sender));
+                    }
+                }
+            }
+        }
+        Err(EngineError::UnexpectedMessage)
     }
 
     pub fn pub_block(&self, block: &BlockWithProof) {
@@ -312,74 +449,16 @@ impl Bft {
     }
 
     pub fn pub_proposal(&mut self, proposal: &Proposal) -> Vec<u8> {
-        let compact_block = CompactBlock::try_from(&proposal.block).unwrap();
-        let block_hash = compact_block.crypt_hash();
+        let mut signed_proposal = SignedProposal::new();
+        signed_proposal.set_proposal(proposal);
+        signed_proposal.set_signature(signature.to_vec());
 
-        let compact_proposal = {
-            let mut compact_proposal = CompactProposal::new();
-            compact_proposal.set_block(compact_block);
-            compact_proposal.set_round(self.round as u64);
-            compact_proposal.set_height(self.height as u64);
-            if let Some(lock_round) = proposal.lock_round {
-                let mut votes = Vec::new();
-                for (sender, vote_message) in proposal.clone().lock_votes.unwrap().votes_by_sender {
-                    let mut vote = ProtoVote::new();
-                    if vote_message.proposal.is_none() {
-                        continue;
-                    }
-                    vote.set_proposal(vote_message.proposal.unwrap().to_vec());
-                    vote.set_sender(sender.to_vec());
-                    vote.set_signature(vote_message.signature.to_vec());
-                    votes.push(vote);
-                }
-
-                compact_proposal.set_islock(true);
-                compact_proposal.set_lock_round(lock_round as u64);
-                compact_proposal.set_lock_votes(votes.into());
-            } else {
-                compact_proposal.set_islock(false);
-            }
-            compact_proposal
-        };
-
-        let compact_signed_proposal = {
-            let mut signed_proposal = CompactSignedProposal::new();
-            let message: Vec<u8> = (&compact_proposal).try_into().unwrap();
-            let author = &self.params.signer;
-            let hash = message.crypt_hash();
-            let signature = Signature::sign(author.keypair.privkey(), &hash).unwrap();
-            trace!(
-                "pub_proposal {} hash: {}, signature: {}",
-                self,
-                hash,
-                signature
-            );
-            signed_proposal.set_proposal(compact_proposal);
-            signed_proposal.set_signature(signature.to_vec());
-            signed_proposal
-        };
-
-        // If consensus has the full verified block, then send it to executor.
-        if let Some(block) = self.verified_blocks.get(&block_hash) {
-            // Send SignedProposal to executor.
-            let signed_proposal = compact_signed_proposal
-                .clone()
-                .complete(block.get_body().get_transactions().to_vec());
-            let msg: Message = signed_proposal.into();
-            self.pub_sender
-                .send((
-                    routing_key!(Consensus >> SignedProposal).into(),
-                    msg.try_into().unwrap(),
-                ))
-                .unwrap();
-        };
-
-        // Send CompactSignedProposal to nextwork.
-        let msg: Message = compact_signed_proposal.into();
+        // Send signed_proposal to nextwork.
+        let msg: Message = signed_proposal.into();
         let bmsg: Vec<u8> = (&msg).try_into().unwrap();
         self.pub_sender
             .send((
-                routing_key!(Consensus >> CompactSignedProposal).into(),
+                routing_key!(Consensus >> SignedProposal).into(),
                 msg.try_into().unwrap(),
             ))
             .unwrap();
@@ -870,113 +949,7 @@ impl Bft {
         }
     }
 
-    fn handle_message(
-        &mut self,
-        message: &[u8],
-        wal_flag: bool,
-    ) -> Result<(usize, usize, Step), EngineError> {
-        let log_msg = message.to_owned();
-        let res = deserialize(&message[..]);
-        if let Ok(decoded) = res {
-            let (message, signature): (Vec<u8>, &[u8]) = decoded;
-            if signature.len() != SIGNATURE_BYTES_LEN {
-                return Err(EngineError::InvalidSignature);
-            }
-            let signature = Signature::from(signature);
-            if let Ok(pubkey) = signature.recover(&message.crypt_hash()) {
-                let decoded = deserialize(&message[..]).unwrap();
-                let (h, r, step, sender, hash) = decoded;
-                trace!(
-                    "handle_message {} parse over h: {}, r: {}, s: {}, sender: {:?}",
-                    self,
-                    h,
-                    r,
-                    step,
-                    sender,
-                );
 
-                if h < self.height {
-                    return Err(EngineError::UnexpectedMessage);
-                }
-
-                if self.is_validator(&sender) && pubkey_to_address(&pubkey) == sender {
-                    let mut trans_flag = false;
-                    let mut add_flag = false;
-                    let now = Instant::now();
-
-                    //deal with equal height,and round fall behind
-                    if h == self.height && r < self.round {
-                        let res = self.send_filter.get_mut(&sender);
-                        if let Some(val) = res {
-                            let (fround, fstep, ins) = *val;
-                            if r > fround || (fround == r && step > fstep) {
-                                add_flag = true;
-                                //for re_transe msg for lag node
-                                if r < self.round {
-                                    trans_flag = true;
-                                }
-                            } else if fround == r
-                                && step == fstep
-                                && now - ins
-                                    > self.params.timer.get_prevote()
-                                        * TIMEOUT_LOW_ROUND_MESSAGE_MULTIPLE
-                            {
-                                add_flag = true;
-                                trans_flag = true;
-                            }
-                        } else {
-                            add_flag = true;
-                        }
-                    }
-
-                    if add_flag {
-                        self.send_filter.insert(sender, (r, step, now));
-                    }
-                    if trans_flag {
-                        self.retrans_vote(h, r, step);
-                        return Err(EngineError::UnexpectedMessage);
-                    }
-
-                    /*bellow commit content is suit for when chain not syncing ,but consensus need
-                    process up */
-                    if h > self.height || (h == self.height && r >= self.round) {
-                        debug!(
-                            "handle_message get vote: \
-                             height {}, \
-                             round {}, \
-                             step {}, \
-                             sender {:?}, \
-                             hash {:?}, \
-                             signature {} ",
-                            h, r, step, sender, hash, signature
-                        );
-                        let ret = self.votes.add(
-                            h,
-                            r,
-                            step,
-                            sender,
-                            &VoteMessage {
-                                proposal: hash,
-                                signature,
-                            },
-                        );
-                        if ret {
-                            if wal_flag {
-                                self.wal_log.save(h, LogType::Vote, &log_msg).unwrap();
-                            }
-                            if h > self.height {
-                                return Err(EngineError::VoteMsgForth(h));
-                            }
-                            return Ok((h, r, step));
-                        }
-
-                        return Err(EngineError::DoubleVote(sender));
-                    }
-                }
-            }
-        }
-        Err(EngineError::UnexpectedMessage)
-    }
 
     fn proc_proposal(&mut self, height: usize, round: usize) -> bool {
         let proposal = self.proposals.get_proposal(height, round);
@@ -1132,133 +1105,6 @@ impl Bft {
         verify_ok
     }
 
-    fn handle_proposal(
-        &mut self,
-        body: &[u8],
-        wal_flag: bool,
-        need_verify: bool,
-    ) -> Result<(usize, usize), EngineError> {
-        trace!(
-            "handle_proposal {} begin wal_flag: {}, need_verify: {}",
-            self,
-            wal_flag,
-            need_verify
-        );
-        let mut hash_v0_20_x = None;
-        let mut csp_msg = if let Ok(csp_msg) = Message::try_from(body) {
-            csp_msg
-        } else {
-            return Err(EngineError::UnexpectedMessage);
-        };
-        let result = csp_msg.clone().take_compact_signed_proposal().or_else(|| {
-            // Only process the old version proposals from wal
-            if !wal_flag {
-                SignedProposal::try_from(body)
-                    .ok()
-                    .and_then(|signed_proposal| {
-                        let message: Vec<u8> = signed_proposal.get_proposal().try_into().unwrap();
-                        // Calculate hash with full signed proposal
-                        hash_v0_20_x = Some(message.crypt_hash());
-                        csp_msg = signed_proposal.compact().into();
-                        csp_msg.clone().take_compact_signed_proposal()
-                    })
-            } else {
-                None
-            }
-        });
-        if let Some(compact_signed_proposal) = result {
-            let signature = {
-                let signature = compact_signed_proposal.get_signature();
-                if signature.len() != SIGNATURE_BYTES_LEN {
-                    return Err(EngineError::InvalidSignature);
-                }
-                Signature::from(signature)
-            };
-            let compact_proposal = compact_signed_proposal.get_proposal().clone();
-            let hash = if let Some(hash) = hash_v0_20_x {
-                hash
-            } else {
-                let message: Vec<u8> = (&compact_proposal).try_into().unwrap();
-                message.crypt_hash()
-            };
-            trace!("handle_proposal {} message {:?}", self, hash);
-            if let Ok(pubkey) = signature.recover(&hash) {
-                let height = compact_proposal.get_height() as usize;
-                let round = compact_proposal.get_round() as usize;
-                if height < self.height
-                    || (height == self.height && round < self.round)
-                    || (height == self.height
-                        && round == self.round
-                        && self.step > Step::ProposeWait)
-                {
-                    debug!("handle_proposal {} get old proposal", self);
-                    return Err(EngineError::VoteMsgDelay(height));
-                }
-
-                trace!(
-                    "handle_proposal {} h: {}, r: {}, sender: {:?}",
-                    self,
-                    height,
-                    round,
-                    pubkey_to_address(&pubkey)
-                );
-                let compact_block = compact_proposal.clone().take_block();
-
-                if need_verify && !self.verify_req(csp_msg, &compact_block, height, round) {
-                    warn!("handle_proposal {} verify_req is error", self);
-                    return Err(EngineError::InvalidTxInProposal);
-                }
-
-                let ret = self.is_round_proposer(height, round, &pubkey_to_address(&pubkey));
-                if ret.is_err() {
-                    warn!("handle_proposal {} is_round_proposer {:?}", self, ret);
-                    return Err(ret.err().unwrap());
-                }
-
-                if (height == self.height && round >= self.round) || height > self.height {
-                    if wal_flag {
-                        self.wal_log.save(height, LogType::Propose, body).unwrap();
-                    }
-                    debug!(
-                        "handle_proposal {} add proposal h: {}, r: {}",
-                        self, height, round
-                    );
-                    let blk = compact_block.try_into().unwrap();
-                    let mut lock_round = None;
-                    let lock_votes = if compact_proposal.get_islock() {
-                        lock_round = Some(compact_proposal.get_lock_round() as usize);
-                        let mut vote_set = VoteSet::new();
-                        for vote in compact_proposal.get_lock_votes() {
-                            vote_set.add(
-                                Address::from_slice(vote.get_sender()),
-                                &VoteMessage {
-                                    proposal: Some(H256::from_slice(vote.get_proposal())),
-                                    signature: Signature::from(vote.get_signature()),
-                                },
-                            );
-                        }
-                        Some(vote_set)
-                    } else {
-                        None
-                    };
-
-                    let proposal = Proposal {
-                        block: blk,
-                        lock_round,
-                        lock_votes,
-                    };
-
-                    self.proposals.add(height, round, proposal);
-
-                    if height > self.height {
-                        return Err(EngineError::VoteMsgForth(height));
-                    }
-                    return Ok((height, round));
-                }
-            }
-        }
-        Err(EngineError::UnexpectedMessage)
-    }
 
     fn clean_saved_info(&mut self) {
         self.proposal = None;
@@ -1296,22 +1142,7 @@ impl Bft {
     }
 
     pub fn new_proposal(&mut self) {
-        let proposal = if let Some(lock_round) = self.lock_round {
-            let lock_block = self.locked_block.clone().unwrap();
-            let lock_vote = &self.locked_vote;
-            {
-                let lock_block_hash = lock_block.crypt_hash();
-                self.proposal = Some(lock_block_hash);
-                info!("new_proposal proposal lock block {:?}", self);
-            }
-            let blk = lock_block.try_into().unwrap();
-            trace!("new_proposal {} proposer vote locked block", self);
-            Proposal {
-                block: blk,
-                lock_round: Some(lock_round),
-                lock_votes: lock_vote.clone(),
-            }
-        } else {
+
             if self.version.is_none() {
                 warn!("new_proposal {} self.version is none", self);
                 return;
@@ -1354,18 +1185,7 @@ impl Bft {
                 info!("new_proposal {} self.pre_hash is none", self);
             }
 
-            let proof = self.proof.clone();
-            if proof.is_default() && self.height > INIT_HEIGHT {
-                info!("new_proposal {} there is no proof", self);
-                return;
-            }
-            if self.height > INIT_HEIGHT && proof.height != self.height - 1 {
-                info!(
-                    "new_proposal {} proof is old; proof height {}",
-                    self, proof.height
-                );
-                return;
-            }
+            let proof = BftProof::default();
             block.mut_header().set_proof(proof.into());
 
             let block_time = unix_now();
@@ -1388,23 +1208,18 @@ impl Bft {
                 block.get_body().get_transactions().len(),
                 bh
             );
-            {
-                self.proposal = Some(bh);
-                self.locked_block = Some(block.clone().compact());
-            }
-            let blk = block.clone().compact().try_into().unwrap();
             // If we publish a proposal block, the block is verified by auth, already.
             self.verified_blocks.insert(bh, block);
             trace!(
                 "new_proposal {} pub proposal proposor vote myslef in not locked",
                 self
             );
-            Proposal {
+            let proposal = Proposal {
                 block: blk,
                 lock_round: None,
                 lock_votes: None,
-            }
-        };
+            };
+
         let bmsg = self.pub_proposal(&proposal);
         self.wal_log
             .save(self.height, LogType::Propose, &bmsg)
@@ -1550,9 +1365,9 @@ impl Bft {
         let mut msg = Message::try_from(&body[..]).unwrap();
         let from_broadcast = rtkey.is_sub_module(SubModules::Net);
         let snapshot = !self.get_snapshot();
-        if from_broadcast && self.consensus_power && snapshot {
+        if from_broadcast && self.is_consensus_node && snapshot {
             match rtkey {
-                routing_key!(Net >> CompactSignedProposal) => {
+                routing_key!(Net >> SignedProposal) => {
                     let res = self.handle_proposal(&body[..], true, true);
                     if let Ok((h, r)) = res {
                         trace!(
@@ -1561,7 +1376,9 @@ impl Bft {
                             h,
                             r,
                         );
-                        if h == self.height && r == self.round && self.step < Step::Prevote {
+                        // to be set bval_input
+
+                        if h == self.height {
                             self.step = Step::ProposeWait;
                             let now = Instant::now();
                             let _ = self.timer_seter.send(TimeoutInfo {
@@ -1620,13 +1437,13 @@ impl Bft {
                     trace!("validators: [{:?}]", validators);
 
                     if validators.contains(&self.params.signer.address) {
-                        self.consensus_power = true;
+                        self.is_consensus_node = true;
                     } else {
                         info!(
                             "address[{:?}] is not consensus power !",
                             self.params.signer.address
                         );
-                        self.consensus_power = false;
+                        self.is_consensus_node = false;
                     }
                     self.auth_manage.receive_authorities_list(
                         rich_status.height as usize,
@@ -1735,66 +1552,6 @@ impl Bft {
         }
     }
 
-    fn process_snapshot(&mut self, mut msg: Message) {
-        if let Some(req) = msg.take_snapshot_req() {
-            match req.cmd {
-                Cmd::Snapshot => {
-                    info!("receive Snapshot::Snapshot: {:?}", req);
-                    snapshot_response(&self.pub_sender, Resp::SnapshotAck, true);
-                }
-                Cmd::Begin => {
-                    info!("receive Snapshot::Begin: {:?}", req);
-                    self.set_snapshot(true);
-                    self.is_cleared = false;
-                    snapshot_response(&self.pub_sender, Resp::BeginAck, true);
-                }
-                Cmd::Restore => {
-                    info!("receive Snapshot::Restore: {:?}", req);
-                    snapshot_response(&self.pub_sender, Resp::RestoreAck, true);
-                }
-                Cmd::Clear => {
-                    info!("receive Snapshot::Clear: {:?}", req);
-                    let walpath = DataPath::wal_path();
-                    let tmp_path = DataPath::root_node_path() + "/wal_tmp";
-                    self.wal_log = Wal::create(&*tmp_path).unwrap();
-                    let _ = fs::remove_dir_all(&walpath);
-                    self.wal_log = Wal::create(&*walpath).unwrap();
-                    let _ = fs::remove_dir_all(&tmp_path);
-
-                    self.is_cleared = true;
-
-                    snapshot_response(&self.pub_sender, Resp::ClearAck, true);
-                }
-                Cmd::End => {
-                    info!("receive Snapshot::End: {:?}", req);
-                    if self.is_cleared {
-                        self.consensus_power = false;
-                        self.clean_verified_info(0);
-                        self.clean_saved_info();
-                        self.clean_filter_info();
-                        self.block_txs.clear();
-                        self.proposals.proposals.clear();
-                        self.votes.votes.clear();
-                        self.proof = BftProof::from(req.get_proof().clone());
-                        self.pre_hash = None;
-                        self.block_proof = None;
-                        self.change_state_step(
-                            req.end_height as usize,
-                            0,
-                            Step::PrecommitAuth,
-                            true,
-                        );
-                        self.save_wal_proof(req.end_height as usize);
-                    }
-
-                    self.set_snapshot(false);
-                    self.is_cleared = false;
-
-                    snapshot_response(&self.pub_sender, Resp::EndAck, true);
-                }
-            }
-        }
-    }
 
     fn receive_new_status(&mut self, status: &RichStatus) {
         let status_height = status.height as usize;
@@ -2060,19 +1817,4 @@ impl Bft {
             }
         }
     }
-}
-
-fn snapshot_response(sender: &Sender<(String, Vec<u8>)>, ack: Resp, flag: bool) {
-    info!("snapshot_response ack: {:?}, flag: {}", ack, flag);
-
-    let mut resp = SnapshotResp::new();
-    resp.set_resp(ack);
-    resp.set_flag(flag);
-    let msg: Message = resp.into();
-    sender
-        .send((
-            routing_key!(Consensus >> SnapshotResp).into(),
-            (&msg).try_into().unwrap(),
-        ))
-        .unwrap();
 }
