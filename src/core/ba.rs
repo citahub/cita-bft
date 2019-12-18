@@ -57,7 +57,7 @@ impl BinaryAgreement {
     pub fn handle_aux(&self,round:usize,send_id:u32,aux : BoolSet) -> Option<BoolSet> {
          Some(true.into())
     }
-    pub fn handle_perm(&self,round:usize,send_id:u32,bperm: BoolSet) -> Option<bool> {
+    pub fn handle_term(&self,round:usize,send_id:u32,term: BoolSet) -> Option<bool> {
         Some(true)
     }
 
@@ -70,7 +70,8 @@ impl BinaryAgreement {
         match self.round % 3 {
             0 => true,
             1 => false,
-            2 => self.getRandom() & 0x01 == 0x01
+            2 => self.getRandom() & 0x01 == 0x01,
+            _ => false,
         }
     }
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::convert::{Into, TryFrom, TryInto};
+use std::convert::Into;
 use authority_manage::AuthorityManage;
 use bincode::{deserialize, serialize, Infinite};
 
@@ -25,13 +25,13 @@ use crate::core::wal::{LogType, Wal};
 use crate::crypto::{pubkey_to_address, CreateKey, Sign, Signature, SIGNATURE_BYTES_LEN};
 use engine::{unix_now, AsMillis, EngineError, Mismatch};
 use libproto::blockchain::{Block, BlockTxs, BlockWithProof, RichStatus};
-use libproto::consensus::{
+use libproto::consensus::{Proposal as ProtoProposal,
     SignedProposal, Vote as ProtoVote,
 };
 
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::{auth, Message};
-//use libproto::{TryFrom, TryInto};
+use libproto::{TryFrom, TryInto};
 use proof::BftProof;
 use pubsub::channel::{Receiver, Sender};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -246,7 +246,6 @@ impl Bft {
                 let height = proposal.get_height() as usize;
                 let round = proposal.get_round() as usize;
                 if height < self.height
-                    || (height == self.height && round < self.round)
                 {
                     debug!("handle_proposal {} get old proposal", self);
                     return Err(EngineError::VoteMsgDelay(height));
@@ -262,9 +261,10 @@ impl Bft {
                 );
 
                 if let Some(idx) = self.get_validator_id(&address) {
-                    let block = proposal.get_block();
+                    let block = proposal.clone().take_block();
+                    let blk = block.clone().try_into().unwrap();
                     let proposal = Proposal {
-                        block: block.into(),
+                        block: block.try_into().unwrap(),
                         lock_round: None,
                         lock_votes: None,
                     };
@@ -395,9 +395,9 @@ impl Bft {
             return None;
         }
         for p in proposals {
-            let mut inner_block = Block::from(p.block);
+            let mut inner_block = Block::try_from(&p.block).unwrap();
             if with_header {
-                pblock.mut_blk().set_header(inner_block.get_header());
+                pblock.mut_blk().set_header(inner_block.clone().take_header());
             }
             txs.extend_from_slice(inner_block.take_body().get_transactions());
         }
@@ -410,8 +410,8 @@ impl Bft {
     }
 
     fn decision_count(&self) -> usize {
-        let count = 0;
-        for i in self.decides {
+        let mut count = 0;
+        for i in self.decides.clone() {
             if i.is_some() {
                 count += 1;
             }
@@ -439,11 +439,11 @@ impl Bft {
             }
             let signature = Signature::from(signature);
             if let Ok(pubkey) = signature.recover(&message.crypt_hash()) {
-                let decoded = deserialize(&message[..]).unwrap();
-                let (height, idx,round, mtype,val, sender) = decoded;
+                let decoded :(u64,u32,usize,u8,BoolSet,Address) = deserialize(&message[..]).unwrap();
+                let (h, idx,round, mtype,val, sender) = decoded;
                 trace!(
                     "handle_message parse over h: {}, idx: {}, round {} mtype: {},val {:?} sender: {:?}",
-                    height,
+                    h,
                     idx,
                     round,
                     mtype,
@@ -451,7 +451,7 @@ impl Bft {
                     sender,
                 );
 
-                if height < self.height {
+                if h < self.height as u64{
                     return Err(EngineError::UnexpectedMessage);
                 }
 
@@ -480,8 +480,6 @@ impl Bft {
         let mut proto_proposal = ProtoProposal::new();
         let pro_block = Block::try_from(&proposal.block).unwrap();
         proto_proposal.set_block(pro_block);
-        proto_proposal.set_islock(proposal.lock_round.is_some());
-        proto_proposal.set_round(self.round as u64);
         proto_proposal.set_height(self.height as u64);
         let message: Vec<u8> = (&proto_proposal).try_into().unwrap();
 
@@ -490,7 +488,7 @@ impl Bft {
         let signature = Signature::sign(author.keypair.privkey(), &hash).unwrap();
 
         let mut signed_proposal = SignedProposal::new();
-        signed_proposal.set_proposal(proposal);
+        signed_proposal.set_proposal(proto_proposal);
         signed_proposal.set_signature(signature.to_vec());
 
         // Send signed_proposal to nextwork.
