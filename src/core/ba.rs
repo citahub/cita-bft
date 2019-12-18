@@ -1,9 +1,18 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::{fmt, result};
+
+use bincode;
+
+use super::bool_multimap::BoolMultimap;
+use super::bool_set::{self, BoolSet};
+
 #[derive(Debug)]
 pub struct BinaryAgreement {
     /// Binary Agreement algorithm epoch.
-    epoch: usize,
+    round: usize,
     /// Maximum number of future epochs for which incoming messages are accepted.
-    max_future_epochs: usize,
+    max_future_rounds: usize,
     /// Received `Conf` messages. Reset on every epoch update.
     received_conf: BTreeMap<u32, BoolSet>,
     /// Received `Term` messages. Kept throughout epoch updates. These count as `BVal`, `Aux` and
@@ -22,20 +31,46 @@ pub struct BinaryAgreement {
 }
 
 impl BinaryAgreement {
-    pub fn handle_bval() {
-
+    pub fn new() -> Self {
+        BinaryAgreement {
+            round:0,
+            max_future_rounds:100,
+            received_conf:BTreeMap::new(),
+            received_term:BoolMultimap::default(),
+            estimated:None,
+            decision:None,
+            conf_values:None,
+        }
     }
-    pub fn handle_aux() {
-
+    pub fn set_input(&mut self,b : bool) -> bool {
+        let is_empty =  self.estimated.is_none();
+        if is_empty {
+            self.estimated = Some(b);
+            return true;
+        }
+        false
     }
-    pub fn handle_conf() {
 
+    pub fn handle_bval(round:usize,send_id:u32,bval:BoolSet) -> Option<(bool,BoolSet)> {
+        Some((true,true.into()))
     }
-    pub fn handle_perm() {
+    pub fn handle_aux(aux : BoolSet) -> Option<BoolSet> {
+         Some(true.into())
+    }
+    pub fn handle_perm(bperm: BoolSet) ->Option<bool> {
+        some(true)
+    }
 
+    fn getRandom(&self) -> usize {
+        let now = self.round;
+        93*now*now + 47*now+ now
     }
 
     fn getCoinState(&self) ->bool {
-
+        match self.epoch % 3 {
+            0 => true,
+            1 => false,
+            2 => self.getRandom() & 0x01 == 0x01
+        }
     }
 }
