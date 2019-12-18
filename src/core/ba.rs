@@ -7,7 +7,7 @@ use bincode;
 use super::bool_multimap::BoolMultimap;
 use super::bool_set::{self, BoolSet};
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct BinaryAgreement {
     /// Binary Agreement algorithm epoch.
     round: usize,
@@ -51,14 +51,14 @@ impl BinaryAgreement {
         false
     }
 
-    pub fn handle_bval(round:usize,send_id:u32,bval:BoolSet) -> Option<(bool,BoolSet)> {
+    pub fn handle_bval(&self,round:usize,send_id:u32,bval:BoolSet) -> Option<(bool,BoolSet)> {
         Some((true,true.into()))
     }
-    pub fn handle_aux(aux : BoolSet) -> Option<BoolSet> {
+    pub fn handle_aux(&self,round:usize,send_id:u32,aux : BoolSet) -> Option<BoolSet> {
          Some(true.into())
     }
-    pub fn handle_perm(bperm: BoolSet) ->Option<bool> {
-        some(true)
+    pub fn handle_perm(&self,round:usize,send_id:u32,bperm: BoolSet) -> Option<bool> {
+        Some(true)
     }
 
     fn getRandom(&self) -> usize {
@@ -67,7 +67,7 @@ impl BinaryAgreement {
     }
 
     fn getCoinState(&self) ->bool {
-        match self.epoch % 3 {
+        match self.round % 3 {
             0 => true,
             1 => false,
             2 => self.getRandom() & 0x01 == 0x01

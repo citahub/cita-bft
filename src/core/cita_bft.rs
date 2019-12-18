@@ -12,27 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::convert::Into;
-
+use std::convert::{Into, TryFrom, TryInto};
 use authority_manage::AuthorityManage;
 use bincode::{deserialize, serialize, Infinite};
 
-use crate::core::params::BftParams;
-use crate::core::voteset::{Proposal, ProposalCollector, VoteCollector, VoteMessage, VoteSet};
+use super::params::BftParams;
+use super::voteset::{IndexProposal,Proposal};
 
 use crate::core::votetime::TimeoutInfo;
 use crate::core::wal::{LogType, Wal};
 
 use crate::crypto::{pubkey_to_address, CreateKey, Sign, Signature, SIGNATURE_BYTES_LEN};
 use engine::{unix_now, AsMillis, EngineError, Mismatch};
-use libproto::blockchain::{Block, BlockTxs, BlockWithProof, CompactBlock, RichStatus};
+use libproto::blockchain::{Block, BlockTxs, BlockWithProof, RichStatus};
 use libproto::consensus::{
-    CompactProposal, CompactSignedProposal, SignedProposal, Vote as ProtoVote,
+    SignedProposal, Vote as ProtoVote,
 };
+
 use libproto::router::{MsgType, RoutingKey, SubModules};
-use libproto::snapshot::{Cmd, Resp, SnapshotResp};
 use libproto::{auth, Message};
-use libproto::{TryFrom, TryInto};
+//use libproto::{TryFrom, TryInto};
 use proof::BftProof;
 use pubsub::channel::{Receiver, Sender};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -42,6 +41,9 @@ use std::time::{Duration, Instant};
 use crate::types::{Address, H256};
 use cita_directories::DataPath;
 use hashable::Hashable;
+use super::ba::BinaryAgreement;
+use super::bool_set::BoolSet;
+use super::bool_multimap::BoolMultimap;
 
 const INIT_HEIGHT: usize = 1;
 const INIT_ROUND: usize = 0;
@@ -105,12 +107,6 @@ impl From<i8> for VerifiedBlockStatus {
     }
 }
 
-impl Default for Step {
-    fn default() -> Step {
-        Step::Propose
-    }
-}
-
 pub struct Bft {
     pub_sender: Sender<PubType>,
     timer_seter: Sender<TimeoutInfo>,
@@ -148,20 +144,13 @@ impl ::std::fmt::Debug for Bft {
         write!(
             f,
             "Bft {{ \
-             h: {}, r: {}, s: {}, v: {:?} \
-             proof: {:?}, pre_hash: {:?}, proposal: {:?}, \
-             lock_round: {:?}, last_commit_round: {:?}, \
-             consensus_power: {:?}, is_snapshot: {}, is_cleared: {} \
+             h: {},, v: {:?} \
+             pre_hash: {:?}, consensus_idx: {:?} \
              }}",
             self.height,
-            self.round,
-            self.step,
             self.version,
-            self.proof,
             self.pre_hash,
             self.consensus_idx,
-            self.is_snapshot,
-            self.is_cleared,
         )
     }
 }
@@ -170,8 +159,8 @@ impl ::std::fmt::Display for Bft {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(
             f,
-            "Bft {{ h: {}, r: {}, s: {} }}",
-            self.height, self.round, self.step,
+            "Bft h: {}",
+            self.height,
         )
     }
 }
@@ -196,7 +185,8 @@ impl Bft {
             height: 0,
             pre_hash: None,
             wal_log: Wal::create(&*logpath).unwrap(),
-
+            current_proposals: IndexProposal::new(),
+            height_proposals: BTreeMap::new(),
             htime: Instant::now(),
             auth_manage: AuthorityManage::new(),
             consensus_idx: None,
@@ -208,15 +198,15 @@ impl Bft {
         }
     }
 
-    pub fn get_validator_id(&self,address: &Address) -> Opiton<u32> {
+    pub fn get_validator_id(&self,address: &Address) -> Option<u32> {
         if self.auth_manage.validators.is_empty() {
             warn!("There are no authorities");
             return None;
         }
 
         for i in 0..self.auth_manage.validators.len() {
-            if self.auth_manage.validators[i] == address {
-                return Some(i);
+            if self.auth_manage.validators[i] == *address {
+                return Some(i as u32);
             }
         }
         None
@@ -226,7 +216,7 @@ impl Bft {
         if height == self.height {
             return self.current_proposals.add_proposal(send_id, proposal);
         } else if height > self.height {
-            self.proposals.entry(height).or_insert(IndexProposal::new()).add_proposal(send_id, proposal);
+            self.height_proposals.entry(height).or_insert(IndexProposal::new()).add_proposal(send_id, proposal);
         }
         false
     }
@@ -271,12 +261,20 @@ impl Bft {
                     address
                 );
 
-                if let Some(idx) = self.get_validator_id() {
+                if let Some(idx) = self.get_validator_id(&address) {
+                    let block = proposal.get_block();
+                    let proposal = Proposal {
+                        block: block.into(),
+                        lock_round: None,
+                        lock_votes: None,
+                    };
+
                     if self.add_proposal(height,idx , proposal) {
+
                         // proposal should be sent to auth to verify
                         // multicast bval
-                        self.bas[idx].set_input(true);
-                        self.send_bval(idx,true);
+                        self.bas[idx as usize].set_input(true);
+                        self.send_bval(idx,0,true.into());
                     }
                 }
 
@@ -290,15 +288,15 @@ impl Bft {
     }
 
     fn send_bval(&mut self,idx:u32,round:usize,bval : BoolSet ) {
-        self.pub_and_broadcast_message(self.height,idx,round,BVAL_TYPE,bval);
+        self.pub_and_broadcast_message(self.height as u64,idx,round,BVAL_TYPE,bval);
     }
 
     fn send_aux(&mut self,idx:u32,round:usize,aux: BoolSet) {
-        self.pub_and_broadcast_message(self.height,idx,round,AUX_TYPE,aux.into());
+        self.pub_and_broadcast_message(self.height as u64,idx,round,AUX_TYPE,aux.into());
     }
 
     fn send_term(&mut self,idx:u32,round:usize, term : bool) {
-        self.pub_and_broadcast_message(self.height,idx,round,TERM_TYPE,term.into());
+        self.pub_and_broadcast_message(self.height as u64,idx,round,TERM_TYPE,term.into());
     }
 
     fn pub_and_broadcast_message(
@@ -338,23 +336,23 @@ impl Bft {
 
     fn handle_ba_message(&mut self,idx:u32,round:usize,mut send_id: u32,mut mtype:u8,mut val:BoolSet) {
         if mtype == BVAL_TYPE {
-            if let Some(sendb,b) = self.bas[idx].handle_bval(round,send_id,val) {
+            if let Some((sendb,b)) = self.bas[idx as usize].handle_bval(round,send_id,val) {
                 if sendb {
                     self.send_bval(idx,round,val);
                 }
                 //next phase process
-                mtype = Aux_type;
+                mtype = AUX_TYPE;
                 send_id = self.consensus_idx.unwrap();
                 val = b.into();
             }
         }
         if mtype == AUX_TYPE {
-            if let Some(decide) = self.bas[idx].handle_aux(round,send_id,val) {
+            if let Some(decide) = self.bas[idx as usize].handle_aux(round,send_id,val) {
                 if let Some(decide) = decide.definite() {
 
-                    self.decides[self.consensus_idx.unwrap()] = Some(decide);
+                    self.decides[self.consensus_idx.unwrap() as usize] = Some(decide);
 
-                    self.send_term(idx,round,decide.into);
+                    self.send_term(idx,round,decide.into());
                     mtype = TERM_TYPE;
                     send_id = self.consensus_idx.unwrap();
                     val = decide.into();
@@ -363,12 +361,12 @@ impl Bft {
         }
 
         if mtype == TERM_TYPE {
-            if let Some(decide) = self.bas[idx].handle_term(round,send_id,val) {
-                if self.decides[self.consensus_idx.unwrap()].is_none() {
-                    self.decides[self.consensus_idx.unwrap()] = Some(decide);
+            if let Some(decide) = self.bas[idx as usize].handle_term(round,send_id,val) {
+                if self.decides[self.consensus_idx.unwrap() as usize].is_none() {
+                    self.decides[self.consensus_idx.unwrap() as usize] = Some(decide);
 
                     if let Some(block) = self.handle_decision() {
-                        self.pub_block(block);
+                        self.pub_block(&block);
                     }
                 }
             }
@@ -397,7 +395,7 @@ impl Bft {
             return None;
         }
         for p in proposals {
-            let mut inner_block = p.take_block();
+            let mut inner_block = Block::from(p.block);
             if with_header {
                 pblock.mut_blk().set_header(inner_block.get_header());
             }
@@ -406,7 +404,7 @@ impl Bft {
 
         txs.sort_by(|a, b| a.get_tx_hash().partial_cmp(b.get_tx_hash()).unwrap());
         txs.dedup_by(|a,b| a.get_tx_hash() == a.get_tx_hash());
-        pblock.mut_body().set_transactions(txs.into());
+        pblock.mut_blk().mut_body().set_transactions(txs.into());
 
         Some(pblock)
     }
@@ -432,7 +430,7 @@ impl Bft {
         &mut self,
         message: &[u8],
         wal_flag: bool,
-    ) -> Result<(usize, usize, Step), EngineError> {
+    ) -> Result<usize, EngineError> {
         let res = deserialize(&message[..]);
         if let Ok(decoded) = res {
             let (message, signature): (Vec<u8>, &[u8]) = decoded;
@@ -444,7 +442,7 @@ impl Bft {
                 let decoded = deserialize(&message[..]).unwrap();
                 let (height, idx,round, mtype,val, sender) = decoded;
                 trace!(
-                    "handle_message parse over h: {}, idx: {}, round {} mtype: {},val {} sender: {:?}",
+                    "handle_message parse over h: {}, idx: {}, round {} mtype: {},val {:?} sender: {:?}",
                     height,
                     idx,
                     round,
@@ -453,13 +451,14 @@ impl Bft {
                     sender,
                 );
 
-                if h < self.height {
+                if height < self.height {
                     return Err(EngineError::UnexpectedMessage);
                 }
 
                 if pubkey_to_address(&pubkey) == sender {
-                    if let Some(send_id) = self.get_validator_id(sender) {
-                        self.handle_ba_message();
+                    if let Some(send_id) = self.get_validator_id(&sender) {
+                        self.handle_ba_message(idx,round,send_id, mtype,val);
+                        return Ok(self.height);
                     }
                 }
             }
@@ -478,6 +477,18 @@ impl Bft {
     }
 
     pub fn pub_proposal(&mut self, proposal: &Proposal) -> Vec<u8> {
+        let mut proto_proposal = ProtoProposal::new();
+        let pro_block = Block::try_from(&proposal.block).unwrap();
+        proto_proposal.set_block(pro_block);
+        proto_proposal.set_islock(proposal.lock_round.is_some());
+        proto_proposal.set_round(self.round as u64);
+        proto_proposal.set_height(self.height as u64);
+        let message: Vec<u8> = (&proto_proposal).try_into().unwrap();
+
+        let author = &self.params.signer;
+        let hash = message.crypt_hash();
+        let signature = Signature::sign(author.keypair.privkey(), &hash).unwrap();
+
         let mut signed_proposal = SignedProposal::new();
         signed_proposal.set_proposal(proposal);
         signed_proposal.set_signature(signature.to_vec());
@@ -513,135 +524,131 @@ impl Bft {
     }
 
 
-    fn retrans_vote(&mut self, height: usize, round: usize, step: Step) {
-        self.pub_and_broadcast_message(height, round, step, Some(H256::default()));
-    }
+//    fn pre_proc_commit(&mut self, height: usize, round: usize) -> bool {
+//        trace!(
+//            "pre_proc_commit {} begin h: {}, r: {}, last_commit_round: {:?}",
+//            self,
+//            height,
+//            round,
+//            self.last_commit_round
+//        );
+//        if self.height == height && self.round == round {
+//            if let Some(cround) = self.last_commit_round {
+//                if cround == round && self.proposal.is_some() {
+//                    let ret = self.commit_block();
+//                    if ret {
+//                        self.verified_blocks.clear();
+//                    }
+//                    return ret;
+//                }
+//            }
+//        }
+//        trace!("pre_proc_commit failed");
+//        false
+//    }
 
-    fn pre_proc_commit(&mut self, height: usize, round: usize) -> bool {
-        trace!(
-            "pre_proc_commit {} begin h: {}, r: {}, last_commit_round: {:?}",
-            self,
-            height,
-            round,
-            self.last_commit_round
-        );
-        if self.height == height && self.round == round {
-            if let Some(cround) = self.last_commit_round {
-                if cround == round && self.proposal.is_some() {
-                    let ret = self.commit_block();
-                    if ret {
-                        self.verified_blocks.clear();
-                    }
-                    return ret;
-                }
-            }
-        }
-        trace!("pre_proc_commit failed");
-        false
-    }
+//    fn save_wal_proof(&mut self, height: usize) {
+//        let bmsg = serialize(&self.proof, Infinite).unwrap();
+//        let _ = self.wal_log.save(height, LogType::Commits, &bmsg);
+//    }
 
-    fn save_wal_proof(&mut self, height: usize) {
-        let bmsg = serialize(&self.proof, Infinite).unwrap();
-        let _ = self.wal_log.save(height, LogType::Commits, &bmsg);
-    }
-
-    fn proc_commit_after(&mut self, height: usize, round: usize) -> bool {
-        let now_height = self.height;
-        debug!("proc_commit_after {} h: {}, r: {}", self, height, round);
-        if now_height < height + 1 {
-            self.change_state_step(height + 1, INIT_ROUND, Step::Propose, true);
-            if let Some(hash) = self.pre_hash {
-                let buf = hash.to_vec();
-                let _ = self.wal_log.save(height + 1, LogType::PrevHash, &buf);
-            }
-
-            if self.proof.height != now_height && now_height > 0 {
-                if let Some(phash) = self.proposal {
-                    let mut res = self
-                        .last_commit_round
-                        .and_then(|cround| self.generate_proof(now_height, cround, phash));
-                    if res.is_none() {
-                        res = self
-                            .lock_round
-                            .and_then(|cround| self.generate_proof(now_height, cround, phash));
-                    }
-                    if let Some(proof) = res {
-                        self.proof = proof;
-                    }
-                }
-            }
-            if !self.proof.is_default() {
-                if self.proof.height == now_height {
-                    self.save_wal_proof(now_height);
-                } else {
-                    trace!("try my best to save proof but not ok {}", self);
-                }
-            }
-            self.clean_saved_info();
-            self.clean_filter_info();
-            self.clean_block_txs();
-            return true;
-        }
-        false
-    }
+//    fn proc_commit_after(&mut self, height: usize, round: usize) -> bool {
+//        let now_height = self.height;
+//        debug!("proc_commit_after {} h: {}, r: {}", self, height, round);
+//        if now_height < height + 1 {
+//            self.change_state_step(height + 1, INIT_ROUND, Step::Propose, true);
+//            if let Some(hash) = self.pre_hash {
+//                let buf = hash.to_vec();
+//                let _ = self.wal_log.save(height + 1, LogType::PrevHash, &buf);
+//            }
+//
+//            if self.proof.height != now_height && now_height > 0 {
+//                if let Some(phash) = self.proposal {
+//                    let mut res = self
+//                        .last_commit_round
+//                        .and_then(|cround| self.generate_proof(now_height, cround, phash));
+//                    if res.is_none() {
+//                        res = self
+//                            .lock_round
+//                            .and_then(|cround| self.generate_proof(now_height, cround, phash));
+//                    }
+//                    if let Some(proof) = res {
+//                        self.proof = proof;
+//                    }
+//                }
+//            }
+//            if !self.proof.is_default() {
+//                if self.proof.height == now_height {
+//                    self.save_wal_proof(now_height);
+//                } else {
+//                    trace!("try my best to save proof but not ok {}", self);
+//                }
+//            }
+//            self.clean_saved_info();
+//            self.clean_filter_info();
+//            self.clean_block_txs();
+//            return true;
+//        }
+//        false
+//    }
 
 
-    fn commit_block(&mut self) -> bool {
-        // Commit the block using a complete signature set.
-        let height = self.height;
-        let round = self.round;
-
-        //to be optimize
-        self.clean_verified_info(height);
-        trace!("commit_block {:?} begin", self);
-        if let Some(hash) = self.proposal {
-            if self.locked_block.is_some() {
-                let gen_flag = self.proof.height != height;
-
-                //generate proof
-                let get_proof = if gen_flag {
-                    self.generate_proof(height, round, hash)
-                } else {
-                    Some(self.proof.clone())
-                };
-
-                if let Some(proof) = get_proof {
-                    if gen_flag {
-                        self.proof = proof.clone();
-                    }
-                    self.save_wal_proof(height + 1);
-
-                    let locked_block = self.locked_block.clone().unwrap();
-                    let locked_block_hash = locked_block.crypt_hash();
-
-                    // The self.locked_block is a compact block.
-                    // So, fetch the bodies of transactions from self.verified_blocks.
-                    if let Some(proposal_block) = self.verified_blocks.get(&locked_block_hash) {
-                        let mut proof_blk = BlockWithProof::new();
-                        proof_blk.set_blk(proposal_block.clone());
-                        proof_blk.set_proof(proof.into());
-
-                        // saved for retranse blockwithproof to chain
-                        self.block_proof = Some((height, proof_blk.clone()));
-                        info!(
-                            "commit_block {} consensus time {:?} proposal {} locked block hash {}",
-                            self,
-                            Instant::now() - self.htime,
-                            hash,
-                            locked_block_hash,
-                        );
-                        self.pub_block(&proof_blk);
-                        return true;
-                    }
-                } else {
-                    info!("commit_block {} proof is not ok", self);
-                    return false;
-                }
-            }
-        }
-        //goto next round
-        false
-    }
+//    fn commit_block(&mut self) -> bool {
+//        // Commit the block using a complete signature set.
+//        let height = self.height;
+//        let round = self.round;
+//
+//        //to be optimize
+//        self.clean_verified_info(height);
+//        trace!("commit_block {:?} begin", self);
+//        if let Some(hash) = self.proposal {
+//            if self.locked_block.is_some() {
+//                let gen_flag = self.proof.height != height;
+//
+//                //generate proof
+//                let get_proof = if gen_flag {
+//                    self.generate_proof(height, round, hash)
+//                } else {
+//                    Some(self.proof.clone())
+//                };
+//
+//                if let Some(proof) = get_proof {
+//                    if gen_flag {
+//                        self.proof = proof.clone();
+//                    }
+//                    self.save_wal_proof(height + 1);
+//
+//                    let locked_block = self.locked_block.clone().unwrap();
+//                    let locked_block_hash = locked_block.crypt_hash();
+//
+//                    // The self.locked_block is a compact block.
+//                    // So, fetch the bodies of transactions from self.verified_blocks.
+//                    if let Some(proposal_block) = self.verified_blocks.get(&locked_block_hash) {
+//                        let mut proof_blk = BlockWithProof::new();
+//                        proof_blk.set_blk(proposal_block.clone());
+//                        proof_blk.set_proof(proof.into());
+//
+//                        // saved for retranse blockwithproof to chain
+//                        self.block_proof = Some((height, proof_blk.clone()));
+//                        info!(
+//                            "commit_block {} consensus time {:?} proposal {} locked block hash {}",
+//                            self,
+//                            Instant::now() - self.htime,
+//                            hash,
+//                            locked_block_hash,
+//                        );
+//                        self.pub_block(&proof_blk);
+//                        return true;
+//                    }
+//                } else {
+//                    info!("commit_block {} proof is not ok", self);
+//                    return false;
+//                }
+//            }
+//        }
+//        //goto next round
+//        false
+//    }
 
     /*
         fn proc_proposal(&mut self, height: usize, round: usize) -> bool {
@@ -816,19 +823,16 @@ impl Bft {
         self.block_txs.retain(|&(hi, _)| hi >= height);
     }
 
-    fn clean_filter_info(&mut self) {
-        self.send_filter.clear();
-    }
 
-    fn clean_proposal_when_verify_failed(&mut self) {
-        let height = self.height;
-        let round = self.round;
-        self.clean_saved_info();
-        self.pub_and_broadcast_message(height, round, Step::Prevote, Some(H256::default()));
-        self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
-        self.change_state_step(height, round, Step::Precommit, false);
-        self.proc_precommit(height, round);
-    }
+//    fn clean_proposal_when_verify_failed(&mut self) {
+//        let height = self.height;
+//        let round = self.round;
+//        self.clean_saved_info();
+//        self.pub_and_broadcast_message(height, round, Step::Prevote, Some(H256::default()));
+//        self.pub_and_broadcast_message(height, round, Step::Precommit, Some(H256::default()));
+//        self.change_state_step(height, round, Step::Precommit, false);
+//        self.proc_precommit(height, round);
+//    }
 
     pub fn new_proposal(&mut self) {
             if self.version.is_none() {
@@ -896,12 +900,14 @@ impl Bft {
                 block.get_body().get_transactions().len(),
                 bh
             );
+            let blk = block.clone().try_into().unwrap();
             // If we publish a proposal block, the block is verified by auth, already.
             self.verified_blocks.insert(bh, block);
             trace!(
                 "new_proposal {} pub proposal proposor vote myslef in not locked",
                 self
             );
+
             let proposal = Proposal {
                 block: blk,
                 lock_round: None,
@@ -916,130 +922,130 @@ impl Bft {
     }
 
     pub fn timeout_process(&mut self, tminfo: &TimeoutInfo) {
-        trace!(
-            "timeout_process {} tminfo: {}, wait {:?}",
-            self,
-            tminfo,
-            Instant::now() - self.htime
-        );
-
-        if tminfo.height < self.height {
-            return;
-        }
-        if tminfo.height == self.height
-            && tminfo.round < self.round
-            && tminfo.step != Step::CommitWait
-        {
-            return;
-        }
-        if tminfo.height == self.height
-            && tminfo.round == self.round
-            && tminfo.step != self.step
-            && tminfo.step != Step::CommitWait
-        {
-            return;
-        }
-        if tminfo.step == Step::ProposeWait {
-            let pres = self.proc_proposal(tminfo.height, tminfo.round);
-            if !pres {
-                trace!(
-                    "timeout_process {} proc_proposal failed; tminfo: {}",
-                    self,
-                    tminfo
-                );
-            }
-            self.pre_proc_prevote();
-            self.change_state_step(tminfo.height, tminfo.round, Step::Prevote, false);
-            //one node need this
-            {
-                self.proc_prevote(tminfo.height, tminfo.round);
-            }
-        } else if tminfo.step == Step::Prevote {
-            self.pre_proc_prevote();
-        } else if tminfo.step == Step::PrevoteWait {
-            if self.pre_proc_precommit() {
-                self.change_state_step(tminfo.height, tminfo.round, Step::Precommit, false);
-                self.proc_precommit(tminfo.height, tminfo.round);
-            } else {
-                self.change_state_step(tminfo.height, tminfo.round, Step::PrecommitAuth, false);
-                let now = Instant::now();
-                let _ = self.timer_seter.send(TimeoutInfo {
-                    timeval: now + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
-                    height: tminfo.height,
-                    round: tminfo.round,
-                    step: Step::PrecommitAuth,
-                });
-            }
-        } else if tminfo.step == Step::PrecommitAuth {
-            let mut wait_too_many_times = false;
-            // If consensus doesn't receive the result of block verification in a specific
-            // time-frame, use the original message to construct a request, then resend it to auth.
-            if let Some((csp_msg, result)) =
-                self.unverified_msg.get_mut(&(tminfo.height, tminfo.round))
-            {
-                if let VerifiedBlockStatus::Init(ref mut times) = *result {
-                    trace!("wait for the verification result {} times", times);
-                    if *times >= 3 {
-                        error!("do not wait for the verification result again");
-                        wait_too_many_times = true;
-                    } else {
-                        let verify_req = csp_msg
-                            .clone()
-                            .take_compact_signed_proposal()
-                            .unwrap()
-                            .create_verify_block_req();
-                        let mut msg: Message = verify_req.into();
-                        msg.set_origin(csp_msg.get_origin());
-                        self.pub_sender
-                            .send((
-                                routing_key!(Consensus >> VerifyBlockReq).into(),
-                                msg.try_into().unwrap(),
-                            ))
-                            .unwrap();
-                        let now = Instant::now();
-                        let _ = self.timer_seter.send(TimeoutInfo {
-                            timeval: now
-                                + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
-                            height: tminfo.height,
-                            round: tminfo.round,
-                            step: Step::PrecommitAuth,
-                        });
-                        *times += 1;
-                    };
-                } else {
-                    warn!("already get verified result {:?}", *result);
-                }
-            };
-            // If waited the result of verification for a long while, we consider it was failed.
-            if wait_too_many_times {
-                self.clean_proposal_when_verify_failed();
-            }
-        } else if tminfo.step == Step::Precommit {
-            /*in this case,need resend prevote : my net server can be connected but other node's
-            server not connected when staring.  maybe my node receive enough vote(prevote),but others
-            did not receive enough vote,so even if my node step precommit phase, i need resend prevote also.
-            */
-            self.pre_proc_prevote();
-            self.pre_proc_precommit();
-        } else if tminfo.step == Step::PrecommitWait {
-            if self.pre_proc_commit(tminfo.height, tminfo.round) {
-                /*wait for new status*/
-                self.change_state_step(tminfo.height, tminfo.round, Step::Commit, false);
-            } else {
-                // clean the param if not locked
-                if self.lock_round.is_none() {
-                    self.clean_saved_info();
-                }
-                self.change_state_step(tminfo.height, tminfo.round + 1, Step::Propose, false);
-                self.redo_work();
-            }
-        } else if tminfo.step == Step::CommitWait {
-            let res = self.proc_commit_after(tminfo.height, tminfo.round);
-            if res {
-                self.htime = Instant::now();
-                self.redo_work();
-            }
-        }
+//        trace!(
+//            "timeout_process {} tminfo: {}, wait {:?}",
+//            self,
+//            tminfo,
+//            Instant::now() - self.htime
+//        );
+//
+//        if tminfo.height < self.height {
+//            return;
+//        }
+//        if tminfo.height == self.height
+//            && tminfo.round < self.round
+//            && tminfo.step != Step::CommitWait
+//        {
+//            return;
+//        }
+//        if tminfo.height == self.height
+//            && tminfo.round == self.round
+//            && tminfo.step != self.step
+//            && tminfo.step != Step::CommitWait
+//        {
+//            return;
+//        }
+//        if tminfo.step == Step::ProposeWait {
+//            let pres = self.proc_proposal(tminfo.height, tminfo.round);
+//            if !pres {
+//                trace!(
+//                    "timeout_process {} proc_proposal failed; tminfo: {}",
+//                    self,
+//                    tminfo
+//                );
+//            }
+//            self.pre_proc_prevote();
+//            self.change_state_step(tminfo.height, tminfo.round, Step::Prevote, false);
+//            //one node need this
+//            {
+//                self.proc_prevote(tminfo.height, tminfo.round);
+//            }
+//        } else if tminfo.step == Step::Prevote {
+//            self.pre_proc_prevote();
+//        } else if tminfo.step == Step::PrevoteWait {
+//            if self.pre_proc_precommit() {
+//                self.change_state_step(tminfo.height, tminfo.round, Step::Precommit, false);
+//                self.proc_precommit(tminfo.height, tminfo.round);
+//            } else {
+//                self.change_state_step(tminfo.height, tminfo.round, Step::PrecommitAuth, false);
+//                let now = Instant::now();
+//                let _ = self.timer_seter.send(TimeoutInfo {
+//                    timeval: now + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
+//                    height: tminfo.height,
+//                    round: tminfo.round,
+//                    step: Step::PrecommitAuth,
+//                });
+//            }
+//        } else if tminfo.step == Step::PrecommitAuth {
+//            let mut wait_too_many_times = false;
+//            // If consensus doesn't receive the result of block verification in a specific
+//            // time-frame, use the original message to construct a request, then resend it to auth.
+//            if let Some((csp_msg, result)) =
+//                self.unverified_msg.get_mut(&(tminfo.height, tminfo.round))
+//            {
+//                if let VerifiedBlockStatus::Init(ref mut times) = *result {
+//                    trace!("wait for the verification result {} times", times);
+//                    if *times >= 3 {
+//                        error!("do not wait for the verification result again");
+//                        wait_too_many_times = true;
+//                    } else {
+//                        let verify_req = csp_msg
+//                            .clone()
+//                            .take_compact_signed_proposal()
+//                            .unwrap()
+//                            .create_verify_block_req();
+//                        let mut msg: Message = verify_req.into();
+//                        msg.set_origin(csp_msg.get_origin());
+//                        self.pub_sender
+//                            .send((
+//                                routing_key!(Consensus >> VerifyBlockReq).into(),
+//                                msg.try_into().unwrap(),
+//                            ))
+//                            .unwrap();
+//                        let now = Instant::now();
+//                        let _ = self.timer_seter.send(TimeoutInfo {
+//                            timeval: now
+//                                + (self.params.timer.get_prevote() * TIMEOUT_RETRANSE_MULTIPLE),
+//                            height: tminfo.height,
+//                            round: tminfo.round,
+//                            step: Step::PrecommitAuth,
+//                        });
+//                        *times += 1;
+//                    };
+//                } else {
+//                    warn!("already get verified result {:?}", *result);
+//                }
+//            };
+//            // If waited the result of verification for a long while, we consider it was failed.
+//            if wait_too_many_times {
+//                self.clean_proposal_when_verify_failed();
+//            }
+//        } else if tminfo.step == Step::Precommit {
+//            /*in this case,need resend prevote : my net server can be connected but other node's
+//            server not connected when staring.  maybe my node receive enough vote(prevote),but others
+//            did not receive enough vote,so even if my node step precommit phase, i need resend prevote also.
+//            */
+//            self.pre_proc_prevote();
+//            self.pre_proc_precommit();
+//        } else if tminfo.step == Step::PrecommitWait {
+//            if self.pre_proc_commit(tminfo.height, tminfo.round) {
+//                /*wait for new status*/
+//                self.change_state_step(tminfo.height, tminfo.round, Step::Commit, false);
+//            } else {
+//                // clean the param if not locked
+//                if self.lock_round.is_none() {
+//                    self.clean_saved_info();
+//                }
+//                self.change_state_step(tminfo.height, tminfo.round + 1, Step::Propose, false);
+//                self.redo_work();
+//            }
+//        } else if tminfo.step == Step::CommitWait {
+//            let res = self.proc_commit_after(tminfo.height, tminfo.round);
+//            if res {
+//                self.htime = Instant::now();
+//                self.redo_work();
+//            }
+//        }
     }
 
     pub fn process(&mut self, info: TransType) {
@@ -1047,17 +1053,15 @@ impl Bft {
         let rtkey = RoutingKey::from(&key);
         let mut msg = Message::try_from(&body[..]).unwrap();
         let from_broadcast = rtkey.is_sub_module(SubModules::Net);
-        let snapshot = !self.get_snapshot();
         if from_broadcast && self.consensus_idx.is_some()  {
             match rtkey {
                 routing_key!(Net >> SignedProposal) => {
-                    let res = self.handle_proposal(&body[..], true, true);
-                    if let Ok((h, r)) = res {
+                    let res = self.handle_proposal(&body[..]);
+                    if let Ok(h) = res {
                         trace!(
-                            "process {} recieve handle_proposal ok; h: {}, r: {}",
+                            "process {} recieve handle_proposal ok; h: {}",
                             self,
                             h,
-                            r,
                         );
 
                         // to be set bval_input
@@ -1075,7 +1079,7 @@ impl Bft {
 
                 routing_key!(Net >> RawBytes) => {
                     let raw_bytes = msg.take_raw_bytes().unwrap();
-                    let _res = self.handle_message(&raw_bytes[..]);
+                    let _res = self.handle_message(&raw_bytes[..],false);
 
                 }
                 _ => {}
@@ -1148,8 +1152,6 @@ impl Bft {
         self.params.timer.set_total_duration(status.interval);
 
         let height = self.height;
-        let round = self.round;
-        let step = self.step;
         trace!(
             "receive_new_status {} receive height {}",
             self,
@@ -1175,8 +1177,8 @@ impl Bft {
         self.new_proposal();
     }
 
-    /*pub fn redo_work(&mut self) {
-        let height = self.height;
+    pub fn redo_work(&mut self) {
+        /*let height = self.height;
         let round = self.round;
         let now = Instant::now();
 
@@ -1227,8 +1229,8 @@ impl Bft {
                 round,
                 step: Step::CommitWait,
             });
-        }
-    }*/
+        }*/
+    }
 
     pub fn start(&mut self) {
         //self.load_wal_log();

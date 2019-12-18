@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::core::cita_bft::{BftTurn, Step};
+use crate::core::cita_bft::{BftTurn};
 use min_max_heap::MinMaxHeap;
 use pubsub::channel::{Receiver, Sender};
 use std::cmp::Ordering;
@@ -23,7 +23,6 @@ pub struct TimeoutInfo {
     pub timeval: Instant,
     pub height: usize,
     pub round: usize,
-    pub step: Step,
 }
 
 impl ::std::cmp::PartialOrd for TimeoutInfo {
@@ -42,10 +41,9 @@ impl ::std::fmt::Display for TimeoutInfo {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(
             f,
-            "TimeoutInfo {{ h: {}, r: {}, s: {}, t: {:?} }}",
+            "TimeoutInfo {{ h: {}, r: {}, t: {:?} }}",
             self.height,
             self.round,
-            self.step,
             self.timeval.elapsed()
         )
     }

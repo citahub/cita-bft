@@ -17,6 +17,9 @@ pub mod params;
 pub mod voteset;
 pub mod votetime;
 pub mod wal;
+pub mod ba;
+pub mod bool_multimap;
+pub mod bool_set;
 
 pub use self::cita_bft::*;
 pub use self::params::*;

@@ -16,8 +16,23 @@ use crate::crypto::{pubkey_to_address, Sign, Signature};
 use crate::types::{Address, H256};
 use bincode::{serialize, Infinite};
 use std::collections::BTreeMap;
+//use libproto::consensus::{Proposal};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Proposal {
+    pub block: Vec<u8>,
+    pub lock_round: Option<usize>,
+    pub lock_votes: Option<usize>,
+}
+
+impl Proposal {
+    pub fn check(&self, _h: usize, _authorities: &[Address]) -> bool {
+       true
+    }
+}
+
+
+#[derive(Clone, Debug)]
 pub struct IndexProposal {
      current_proposals : BTreeMap<u32,Proposal>,
 }
@@ -35,7 +50,7 @@ impl IndexProposal {
 
     // Be care of sequence
     pub fn get_proposals(&self,idxs: Vec<u32>) -> Vec<Proposal> {
-        let o :Vec = self.current_proposals.iter().filter(|idx| idxs.contains(idx)).collect();
+        let o :Vec<_> = self.current_proposals.iter().filter(|idx| idxs.contains(idx.0)).map(|x| x.1.clone()).collect();
         if o.len() == idxs.len() {
             return o;
         }
@@ -46,7 +61,7 @@ impl IndexProposal {
         if self.current_proposals.contains_key(&idx) {
             return false;
         }
-        self.current_proposals.insert(&idx,proposal);
+        self.current_proposals.insert(idx,proposal);
         true
     }
 }
