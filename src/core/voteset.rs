@@ -34,7 +34,7 @@ impl Proposal {
 
 #[derive(Clone, Debug)]
 pub struct IndexProposal {
-     current_proposals : BTreeMap<u32,Proposal>,
+     pub current_proposals : BTreeMap<u32,Proposal>,
 }
 
 impl IndexProposal {

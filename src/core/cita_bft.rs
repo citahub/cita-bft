@@ -119,6 +119,7 @@ pub struct Bft {
 
     current_proposals: IndexProposal,
     height_proposals: BTreeMap<usize,IndexProposal>,
+    height_votes: BTreeMap<usize,Vec<(u32,usize,u32,u8,BoolSet)>>,
     bas :Vec<BinaryAgreement>,
     decides: Vec<Option<bool>>,
 
@@ -137,6 +138,7 @@ pub struct Bft {
     // The verified blocks with the bodies of transactions.
     verified_blocks: HashMap<H256, Block>,
     version: Option<u32>,
+    send_flag: bool,
 }
 
 impl ::std::fmt::Debug for Bft {
@@ -179,14 +181,15 @@ impl Bft {
             pub_sender: s,
             timer_seter: ts,
             receiver: r,
-            bas: vec!(BinaryAgreement::new();100),
-            decides: vec!(None;100),
+            bas: vec!(BinaryAgreement::new();5),
+            decides: vec!(None;5),
             params,
             height: 0,
             pre_hash: None,
             wal_log: Wal::create(&*logpath).unwrap(),
             current_proposals: IndexProposal::new(),
             height_proposals: BTreeMap::new(),
+            height_votes: BTreeMap::new(),
             htime: Instant::now(),
             auth_manage: AuthorityManage::new(),
             consensus_idx: None,
@@ -195,7 +198,19 @@ impl Bft {
             block_proof: None,
             verified_blocks: HashMap::new(),
             version: None,
+            send_flag:false,
         }
+    }
+
+    fn clear(&mut self) {
+        for x in self.decides.iter_mut() {
+            *x = None;
+        }
+        for i in self.bas.iter_mut() {
+            i.clear();
+        }
+        self.current_proposals.clear();
+        self.send_flag = false;
     }
 
     pub fn get_validator_id(&self,address: &Address) -> Option<u32> {
@@ -271,10 +286,13 @@ impl Bft {
 
                     if self.add_proposal(height,idx , proposal) {
 
+                        warn!("handle_proposal ---  add proposal ok idx {:?}",idx);
+
                         // proposal should be sent to auth to verify
                         // multicast bval
                         self.bas[idx as usize].set_input(true);
                         self.send_bval(idx,0,true.into());
+                        self.handle_ba_message(idx,0,self.consensus_idx.unwrap(),BVAL_TYPE,true.into());
                     }
                 }
 
@@ -314,7 +332,7 @@ impl Bft {
         let msg = serialize(&(msg, sig), Infinite).unwrap();
 
         trace!(
-            "pub_and_broadcast_message {} begin h: {}, r: {}, type: {} v {:?}",
+            "pub_and_broadcast_message {} begin h: {}, idx: {}, type: {} v {:?}",
             self,
             height,
             idx,
@@ -335,38 +353,55 @@ impl Bft {
     }
 
     fn handle_ba_message(&mut self,idx:u32,round:usize,mut send_id: u32,mut mtype:u8,mut val:BoolSet) {
+        warn!("handle_ba_message get idx {:?} send_id {:?} mtype {:?} val {:?} ",idx,send_id,mtype,val);
         if mtype == BVAL_TYPE {
             if let Some((sendb,b)) = self.bas[idx as usize].handle_bval(round,send_id,val) {
-                if sendb {
-                    self.send_bval(idx,round,val);
+//                if sendb {
+//                     self.send_bval(idx,round,val);
+//                }
+                if let Some(b) = b.definite() {
+                    self.send_aux(idx,round,b.into());
                 }
                 //next phase process
+
                 mtype = AUX_TYPE;
                 send_id = self.consensus_idx.unwrap();
                 val = b.into();
+
+                warn!("++++ handle_ba_message inner aux sendid {:?}",send_id);
             }
         }
+
         if mtype == AUX_TYPE {
             if let Some(decide) = self.bas[idx as usize].handle_aux(round,send_id,val) {
                 if let Some(decide) = decide.definite() {
 
-                    self.decides[self.consensus_idx.unwrap() as usize] = Some(decide);
+                    self.decides[idx as usize] = Some(decide);
 
                     self.send_term(idx,round,decide.into());
                     mtype = TERM_TYPE;
                     send_id = self.consensus_idx.unwrap();
                     val = decide.into();
+
+                    warn!("++++ handle_ba_message inner term  sendid {:?}",send_id);
                 }
             }
         }
 
         if mtype == TERM_TYPE {
-            if let Some(decide) = self.bas[idx as usize].handle_term(round,send_id,val) {
-                if self.decides[self.consensus_idx.unwrap() as usize].is_none() {
-                    self.decides[self.consensus_idx.unwrap() as usize] = Some(decide);
+            if let Some(b) = val.definite() {
+                //self.decides[idx as usize] = Some(b);
 
-                    if let Some(block) = self.handle_decision() {
+                if let Some(decide) = self.bas[idx as usize].handle_term(round,send_id,val) {
+                    if self.decides[idx as usize].is_none() {
+                        self.decides[idx as usize] = Some(decide);
+                    }
+                }
+
+                if let Some(block) = self.handle_decision() {
+                    if !self.send_flag {
                         self.pub_block(&block);
+                        self.send_flag = true;
                     }
                 }
             }
@@ -374,21 +409,31 @@ impl Bft {
     }
 
     fn handle_decision(&mut self) -> Option<BlockWithProof> {
-        let mut with_header = false;
+        let mut with_header = true;
         let mut ids = Vec::new();
 
-        if self.is_all_vote(self.decision_count()) {
+        warn!("handle_decision  {:?} count {:?}",self.decides,self.decision_count());
+        if !self.is_all_vote(self.decision_count()) {
             return None;
         }
 
-
        for i in 0..self.decides.len() {
            if self.decides[i] == Some(true) {
+               warn!("handle_decision true {:?}",i);
                ids.push(i as u32);
            }
        }
 
+        if ids.is_empty() {
+            return None;
+        }
+
         let mut pblock = BlockWithProof::new();
+        let mut proof = BftProof::default();
+        proof.height = self.height;
+        proof.round = 0;
+        pblock.set_proof(proof.into());
+
         let mut txs = Vec::new();
         let proposals = self.current_proposals.get_proposals(ids);
         if proposals.is_empty() {
@@ -398,6 +443,7 @@ impl Bft {
             let mut inner_block = Block::try_from(&p.block).unwrap();
             if with_header {
                 pblock.mut_blk().set_header(inner_block.clone().take_header());
+                with_header = false;
             }
             txs.extend_from_slice(inner_block.take_body().get_transactions());
         }
@@ -418,13 +464,6 @@ impl Bft {
         }
         count
     }
-
-    fn clear(&mut self) {
-        for x in self.decides.iter_mut() {
-            *x = None;
-        }
-    }
-
 
     fn handle_message(
         &mut self,
@@ -451,14 +490,25 @@ impl Bft {
                     sender,
                 );
 
-                if h < self.height as u64{
-                    return Err(EngineError::UnexpectedMessage);
+                for i in 0..2 {
+                    info!("****** decisions {:?} {:?}",i,self.decides[i]);
                 }
 
+                if h < self.height as u64{
+                    return Err(EngineError::UnexpectedMessage);
+                } else if h == self.height as u64 && self.decides[idx as usize].is_some() {
+                    // consider
+                    // self.send_term(idx,round,self.decides[idx as usize].unwrap().into());
+                    return Ok(self.height)
+                }
                 if pubkey_to_address(&pubkey) == sender {
                     if let Some(send_id) = self.get_validator_id(&sender) {
-                        self.handle_ba_message(idx,round,send_id, mtype,val);
-                        return Ok(self.height);
+                        if h as usize> self.height {
+                            self.height_votes.entry(h as usize).or_insert(Vec::new()).push((idx,round,send_id,mtype,val));
+                        } else {
+                            self.handle_ba_message(idx,round,send_id, mtype,val);
+                            return Ok(self.height);
+                        }
                     }
                 }
             }
@@ -467,6 +517,7 @@ impl Bft {
     }
 
     pub fn pub_block(&self, block: &BlockWithProof) {
+        warn!("** pub_block {:?}",block);
         let msg: Message = block.clone().into();
         self.pub_sender
             .send((
@@ -912,11 +963,11 @@ impl Bft {
                 lock_votes: None,
             };
 
-        let _bmsg = self.pub_proposal(&proposal);
-        /*self.wal_log
-            .save(self.height, LogType::Propose, &bmsg)
-            .unwrap();*/
-        self.add_proposal(self.height, self.consensus_idx.unwrap(), proposal);
+            let _bmsg = self.pub_proposal(&proposal);
+            /*self.wal_log
+                .save(self.height, LogType::Propose, &bmsg)
+                .unwrap();*/
+            self.add_proposal(self.height, self.consensus_idx.unwrap(), proposal);
     }
 
     pub fn timeout_process(&mut self, tminfo: &TimeoutInfo) {
@@ -1048,6 +1099,7 @@ impl Bft {
 
     pub fn process(&mut self, info: TransType) {
         let (key, body) = info;
+        info!("----- process recieve key {:?}", key);
         let rtkey = RoutingKey::from(&key);
         let mut msg = Message::try_from(&body[..]).unwrap();
         let from_broadcast = rtkey.is_sub_module(SubModules::Net);
@@ -1061,11 +1113,6 @@ impl Bft {
                             self,
                             h,
                         );
-
-                        // to be set bval_input
-                        if h == self.height {
-                            self.new_proposal();
-                        }
                     } else {
                         trace!(
                             "process {} fail handle_proposal {}",
@@ -1092,7 +1139,7 @@ impl Bft {
                         self,
                         rich_status.height
                     );
-                    self.receive_new_status(&rich_status);
+
                     let authorities: Vec<Address> = rich_status
                         .get_nodes()
                         .iter()
@@ -1106,18 +1153,21 @@ impl Bft {
                         .map(|node| Address::from_slice(node))
                         .collect();
                     trace!("validators: [{:?}]", validators);
-
-                    if let Some(idx) =self.get_validator_id(&self.params.signer.address) {
-                        self.consensus_idx = Some(idx);
-                    }
                     self.auth_manage.receive_authorities_list(
                         rich_status.height as usize,
                         &authorities,
                         &validators,
                     );
+
+                    if let Some(idx) =self.get_validator_id(&self.params.signer.address) {
+                        self.consensus_idx = Some(idx);
+                        warn!("***** my idx is {:?}",self.consensus_idx);
+                    }
                     let version = rich_status.get_version();
                     trace!("verison: {}", version);
                     self.version = Some(version);
+
+                    self.receive_new_status(&rich_status);
                 }
 
                 routing_key!(Auth >> VerifyBlockResp) => {
@@ -1134,10 +1184,8 @@ impl Bft {
                     let msg: Vec<u8> = (&block_txs).try_into().unwrap();
                     self.block_txs.push_back((height, block_txs));
                     //let _ = self.wal_log.save(height, LogType::AuthTxs, &msg);
-                    {
-                        self.new_proposal();
-                        // Should be Resend ?
-                    }
+
+                    self.new_round_start(2);
                 }
                 _ => {}
             }
@@ -1155,12 +1203,52 @@ impl Bft {
             self,
             status_height,
         );
-        if height > 0 && status_height + 1 < height {
+        if height > 0 && status_height < height {
             return;
         }
 
         let pre_hash = H256::from_slice(&status.hash);
         self.pre_hash = Some(pre_hash);
+
+        self.height = status_height+ 1;
+
+        self.clear();
+
+        if let Some(p) = self.height_proposals.remove(&self.height) {
+            for (idx,proposal) in p.current_proposals {
+                if self.add_proposal(self.height,idx , proposal) {
+                    warn!("handle_proposal ---  add proposal ok idx {:?}",idx);
+
+                    // proposal should be sent to auth to verify
+                    // multicast bval
+                    self.bas[idx as usize].set_input(true);
+                    self.send_bval(idx,0,true.into());
+                    self.handle_ba_message(idx,0,self.consensus_idx.unwrap(),BVAL_TYPE,true.into());
+                }
+            }
+        }
+
+        if let Some(v) = self.height_votes.remove(&self.height) {
+            for (idx,round,send_id,mtype,val) in v {
+                self.handle_ba_message(idx,round,send_id,mtype,val);
+            }
+        }
+
+        let mut flag = false;
+        if self.height == 1 {
+            flag = true;
+        } else {
+            for &(height, _) in &self.block_txs {
+                if height == self.height - 1 {
+                    flag = true;
+                    break;
+                }
+            }
+        }
+
+        if flag {
+            self.new_round_start(self.height);
+        }
 
         /*let now = Instant::now();
         let _ = self.timer_seter.send(TimeoutInfo {
@@ -1173,6 +1261,8 @@ impl Bft {
 
     fn new_round_start(&mut self, height: usize) {
         self.new_proposal();
+        self.send_bval(self.consensus_idx.unwrap(),0,true.into());
+        self.handle_ba_message(self.consensus_idx.unwrap(),0,self.consensus_idx.unwrap(),BVAL_TYPE,true.into());
     }
 
     pub fn redo_work(&mut self) {
