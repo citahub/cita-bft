@@ -1,5 +1,9 @@
 dist: xenial
 language: rust
+rust:
+- 1.39.0
+- stable
+
 addons:
   apt:
     packages:
