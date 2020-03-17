@@ -62,6 +62,10 @@ impl Default for BftTimer {
 }
 
 impl BftTimer {
+    pub fn get_total_duration(&self) -> u64 {
+        self.total_duration.get()
+    }
+
     pub fn set_total_duration(&self, duration: u64) {
         self.total_duration.set(duration);
     }

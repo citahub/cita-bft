@@ -55,15 +55,19 @@ extern crate util;
 
 use clap::App;
 use pubsub::channel;
+use std::env;
 use std::thread;
 
 mod core;
 use crate::core::cita_bft::{Bft, BftTurn};
 use crate::core::params::{BftParams, PrivateKey};
 use crate::core::votetime::WaitTimer;
+use crate::core::SignSymbol;
+use crate::core::TimeOffset;
 use cpuprofiler::PROFILER;
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
+use std::cmp::Ordering;
 use util::set_panic_handler;
 
 fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
@@ -101,6 +105,8 @@ fn main() {
             "--prof-duration=[0] 'Specify the duration for profiling, zero means no profiling'",
         )
         .args_from_usage("-s, --stdout 'Log to console'")
+        .args_from_usage("--modify_time=[0], \
+        'you can set a value to modify proposal time. eg. 10000: proposal time + 10s, -10000: proposal time -10s.'")
         .get_matches();
 
     let stdout = matches.is_present("stdout");
@@ -163,6 +169,43 @@ fn main() {
     let params = BftParams::new(&pk);
     let mainthd = thread::spawn(move || {
         let mut engine = Bft::new(tx_pub, main2timer, receiver, params);
+        let mut time_offset: i64 = 0;
+        if matches.is_present("modify_time") || env::var("MODIFY_TIME").is_ok() {
+            if let Some(time) = matches.value_of("modify_time") {
+                time_offset = time.parse().unwrap_or_else(|err| {
+                    warn!("time modify: cli {} parse to i64 error: {}", time, err);
+                    0
+                });
+            }
+
+            if time_offset == 0 {
+                if let Ok(time) = env::var("MODIFY_TIME") {
+                    time_offset = time.parse().unwrap_or_else(|err| {
+                        warn!("time modify: env {} parse to i64 error: {}", time, err);
+                        0
+                    });
+                }
+            }
+
+            match time_offset.cmp(&0) {
+                Ordering::Greater => {
+                    engine.mock_time_modify =
+                        TimeOffset::new(SignSymbol::Positive, time_offset as u64);
+                }
+                Ordering::Equal => {
+                    engine.mock_time_modify = TimeOffset::new(SignSymbol::Zero, 0);
+                }
+                Ordering::Less => {
+                    engine.mock_time_modify =
+                        TimeOffset::new(SignSymbol::Negative, (-time_offset) as u64);
+                }
+            }
+
+            info!(
+                "Use timestamp modify function, the param: {:?}",
+                engine.mock_time_modify
+            )
+        }
         engine.start();
     });
 

@@ -35,6 +35,7 @@ use libproto::{auth, Message};
 use libproto::{TryFrom, TryInto};
 use proof::BftProof;
 use pubsub::channel::{Receiver, Sender};
+use rustc_hex::ToHex;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::time::{Duration, Instant};
@@ -57,6 +58,25 @@ pub type PubType = (String, Vec<u8>);
 pub enum BftTurn {
     Message(TransType),
     Timeout(TimeoutInfo),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SignSymbol {
+    Positive,
+    Zero,
+    Negative,
+}
+
+#[derive(Debug)]
+pub struct TimeOffset {
+    sym: SignSymbol,
+    off: u64,
+}
+
+impl TimeOffset {
+    pub fn new(sym: SignSymbol, off: u64) -> TimeOffset {
+        TimeOffset { sym, off }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -154,6 +174,8 @@ pub struct Bft {
     step: Step,
     proof: BftProof,
     pre_hash: Option<H256>,
+    // last timestamp of last received block
+    pre_ts: u64,
     votes: VoteCollector,
     proposals: ProposalCollector,
     proposal: Option<H256>,
@@ -183,6 +205,8 @@ pub struct Bft {
     is_cleared: bool,
 
     version: Option<u32>,
+
+    pub mock_time_modify: TimeOffset,
 }
 
 impl ::std::fmt::Debug for Bft {
@@ -242,6 +266,7 @@ impl Bft {
             step: Step::Propose,
             proof,
             pre_hash: None,
+            pre_ts: 0,
             votes: VoteCollector::new(),
             proposals: ProposalCollector::new(),
             proposal: None,
@@ -261,6 +286,7 @@ impl Bft {
             is_snapshot: false,
             is_cleared: false,
             version: None,
+            mock_time_modify: TimeOffset::new(SignSymbol::Zero, 0),
         }
     }
 
@@ -1010,6 +1036,24 @@ impl Bft {
                     return false;
                 }
 
+                let pro_ts: u64 = block.get_header().get_timestamp();
+                let pre_ts: u64 = self.pre_ts;
+                let cur_ts: u64 = AsMillis::as_millis(&unix_now());
+                if pro_ts <= pre_ts || pro_ts > cur_ts + self.params.timer.get_total_duration() {
+                    warn!(
+                        "proc_proposal {} timestamp error h: {}, r: {}, current timestamp {}, propoal timestamp {}, pre-block timestamp {}, upper limit {}",
+                        self, height, round, cur_ts, pro_ts, pre_ts, self.params.timer.get_total_duration()
+                    );
+                    return false;
+                }
+
+                if pro_ts > cur_ts {
+                    warn!(
+                        "proc_proposal {} timestamp warning h: {}, r: {}, current timestamp {}, propoal timestamp {}, proposer {}",
+                        self, height, round, cur_ts, pro_ts, block.get_header().get_proposer().to_hex()
+                    );
+                }
+
                 //proof : self.params vs proposal's block's broof
                 let block_proof = block.get_header().get_proof();
                 let proof = BftProof::from(block_proof.clone());
@@ -1123,7 +1167,7 @@ impl Bft {
             self.pub_sender
                 .send((
                     routing_key!(Consensus >> VerifyBlockReq).into(),
-                    msg.clone().try_into().unwrap(),
+                    msg.try_into().unwrap(),
                 ))
                 .unwrap();
             self.unverified_msg
@@ -1337,7 +1381,7 @@ impl Bft {
                     // Taking all transactions to avoid that.
                     // Next turn when proposing a new proposal in the same height, this node will use
                     // an empty block.
-                    block.set_body(blocktxs.take_body().clone());
+                    block.set_body(blocktxs.take_body());
                     break;
                 }
             }
@@ -1368,11 +1412,32 @@ impl Bft {
             }
             block.mut_header().set_proof(proof.into());
 
-            let block_time = unix_now();
+            let mut block_time = AsMillis::as_millis(&unix_now());
             let transactions_root = block.get_body().transactions_root();
-            block
-                .mut_header()
-                .set_timestamp(AsMillis::as_millis(&block_time));
+            if self.pre_ts >= block_time {
+                block_time = self.pre_ts + 100;
+                warn!(
+                    "new_proposal {} the node time fall behind the network",
+                    self
+                )
+            } else if self.pre_ts + 2 * self.params.timer.get_total_duration() < block_time {
+                warn!(
+                    "new_proposal {} the node time may be too far ahead of the network",
+                    self
+                )
+            }
+
+            // time modify test option, normal choice zero
+            match self.mock_time_modify.sym {
+                SignSymbol::Positive => block
+                    .mut_header()
+                    .set_timestamp(block_time + self.mock_time_modify.off),
+                SignSymbol::Zero => block.mut_header().set_timestamp(block_time),
+                SignSymbol::Negative => block
+                    .mut_header()
+                    .set_timestamp(block_time - self.mock_time_modify.off),
+            }
+
             block.mut_header().set_height(self.height as u64);
             block
                 .mut_header()
@@ -1813,10 +1878,12 @@ impl Bft {
         }
 
         let pre_hash = H256::from_slice(&status.hash);
+        let pre_ts = status.timestamp;
         if height > 0 && status_height + 1 == height {
-            // try efforts to save previous hash,when current block is not commit to chain
+            // try efforts to save previous hash and timestamp, when current block is not commit to chain
             if step < Step::CommitWait {
                 self.pre_hash = Some(pre_hash);
+                self.pre_ts = pre_ts;
             }
 
             // commit timeout since pub block to chain,so resending the block
@@ -1831,6 +1898,7 @@ impl Bft {
         }
         let new_round = if status_height == height {
             self.pre_hash = Some(pre_hash);
+            self.pre_ts = pre_ts;
             self.round
         } else {
             INIT_ROUND

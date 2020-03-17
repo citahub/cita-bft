@@ -21,7 +21,7 @@ jobs:
         - cargo fmt --all -- --check
     - stage: Check
       name: Clippy
-      env: RUSTFLAGS='-F warnings'
+      env: RUSTFLAGS='-F warnings -A deprecated'
       script:
         - rustup component add clippy
         - cargo clippy --all --all-targets
@@ -33,6 +33,6 @@ jobs:
             fi
     - stage: Test
       name: Unit Test
-      env: RUSTFLAGS='-F warnings'
+      env: RUSTFLAGS='-F warnings -A deprecated'
       script:
         - cargo test --all --verbose
