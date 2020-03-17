@@ -1414,8 +1414,17 @@ impl Bft {
 
             let mut block_time = AsMillis::as_millis(&unix_now());
             let transactions_root = block.get_body().transactions_root();
-            if self.pre_ts > block_time {
+            if self.pre_ts >= block_time {
                 block_time = self.pre_ts + 100;
+                warn!(
+                    "new_proposal {} the node time fall behind the network",
+                    self
+                )
+            } else if self.pre_ts + 2 * self.params.timer.get_total_duration() < block_time {
+                warn!(
+                    "new_proposal {} the node time may be too far ahead of the network",
+                    self
+                )
             }
 
             // time modify test option, normal choice zero
