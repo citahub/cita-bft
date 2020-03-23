@@ -24,7 +24,6 @@ proof = { git = "https://github.com/citahub/cita-common.git", branch = "develop"
 time = "0.1.36"
 engine = { git = "https://github.com/citahub/cita-common.git", branch = "develop" }
 lru-cache = "0.1"
-cpuprofiler = "0.0.3"
 authority_manage = { git = "https://github.com/citahub/cita-common.git", branch = "develop" }
 rustc-hex = "1.0"
 min-max-heap = "1.2.2"

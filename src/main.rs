@@ -64,29 +64,10 @@ use crate::core::params::{BftParams, PrivateKey};
 use crate::core::votetime::WaitTimer;
 use crate::core::SignSymbol;
 use crate::core::TimeOffset;
-use cpuprofiler::PROFILER;
 use libproto::router::{MsgType, RoutingKey, SubModules};
 use pubsub::start_pubsub;
 use std::cmp::Ordering;
 use util::set_panic_handler;
-
-fn profiler(flag_prof_start: u64, flag_prof_duration: u64) {
-    //start profiling
-    if flag_prof_duration != 0 {
-        let start = flag_prof_start;
-        let duration = flag_prof_duration;
-        thread::spawn(move || {
-            thread::sleep(std::time::Duration::new(start, 0));
-            PROFILER
-                .lock()
-                .unwrap()
-                .start("./tdmint.profiler")
-                .expect("Couldn't start");
-            thread::sleep(std::time::Duration::new(duration, 0));
-            PROFILER.lock().unwrap().stop().unwrap();
-        });
-    }
-}
 
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
@@ -98,12 +79,6 @@ fn main() {
         .about("CITA Block Chain Node powered by Rust")
         .args_from_usage("-c, --config=[FILE] 'Sets a custom config file'")
         .args_from_usage("-p, --private=[FILE] 'Sets a private key file'")
-        .args_from_usage(
-            "--prof-start=[0] 'Specify the start time of profiling, zero means no profiling'",
-        )
-        .args_from_usage(
-            "--prof-duration=[0] 'Specify the duration for profiling, zero means no profiling'",
-        )
         .args_from_usage("-s, --stdout 'Log to console'")
         .args_from_usage("--modify_time=[0], \
         'you can set a value to modify proposal time. eg. 10000: proposal time + 10s, -10000: proposal time -10s.'")
@@ -118,17 +93,6 @@ fn main() {
         trace!("Value for private config: {}", p);
         pk_path = p;
     }
-
-    let flag_prof_start = matches
-        .value_of("prof-start")
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap();
-    let flag_prof_duration = matches
-        .value_of("prof-duration")
-        .unwrap_or("0")
-        .parse::<u64>()
-        .unwrap();
 
     // timer module
     let (main2timer, timer4main) = channel::unbounded();
@@ -208,8 +172,6 @@ fn main() {
         }
         engine.start();
     });
-
-    profiler(flag_prof_start, flag_prof_duration);
 
     mainthd.join().unwrap();
     timethd.join().unwrap();
