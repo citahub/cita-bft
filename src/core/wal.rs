@@ -136,9 +136,12 @@ impl Wal {
         self.height_fs.insert(height, fs);
 
         if height > DELETE_FILE_INTERVAL {
-            self.height_fs.remove(&(height - DELETE_FILE_INTERVAL));
-            let delfilename = Wal::get_file_path(&self.dir, height - DELETE_FILE_INTERVAL);
-            let _ = ::std::fs::remove_file(delfilename);
+            let newer_file = self.height_fs.split_off(&(height - DELETE_FILE_INTERVAL));
+            for &i in self.height_fs.keys() {
+                let delfilename = Wal::get_file_path(&self.dir, i);
+                let _ = ::std::fs::remove_file(delfilename);
+            }
+            self.height_fs = newer_file;
         }
         Ok(())
     }
