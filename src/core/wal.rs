@@ -15,6 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs::{read_dir, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
@@ -115,7 +116,7 @@ impl Wal {
         let mut name = height.to_string();
         name += ".log";
         let pathname = dir.to_string() + "/";
-        pathname.clone() + &*name
+        pathname + &*name
     }
 
     pub fn set_height(&mut self, height: usize) -> Result<(), io::Error> {
@@ -150,16 +151,20 @@ impl Wal {
         let mtype = log_type as u8;
         if !self.height_fs.contains_key(&height) {
             // 2 more higher then current height, not process it
-            if height > self.current_height + 1 {
-                return Ok(0);
-            } else if height == self.current_height + 1 {
-                let filename = Wal::get_file_path(&self.dir, height);
-                let fs = OpenOptions::new()
-                    .read(true)
-                    .create(true)
-                    .write(true)
-                    .open(filename)?;
-                self.height_fs.insert(height, fs);
+            match height.partial_cmp(&(self.current_height + 1)) {
+                Some(Ordering::Equal) => {
+                    let filename = Wal::get_file_path(&self.dir, height);
+                    let fs = OpenOptions::new()
+                        .read(true)
+                        .create(true)
+                        .write(true)
+                        .open(filename)?;
+                    self.height_fs.insert(height, fs);
+                }
+                Some(Ordering::Greater) => {
+                    return Ok(0);
+                }
+                _ => {}
             }
         }
         let mlen = msg.len() as u32;

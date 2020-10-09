@@ -461,8 +461,8 @@ impl Bft {
                         } else {
                             let mut clean_flag = true;
                             let op = self.proposals.get_proposal(height, round);
-                            if op.is_some() {
-                                let pro_block = CompactBlock::try_from(&op.unwrap().block);
+                            if let Some(op_raw) = op {
+                                let pro_block = CompactBlock::try_from(&op_raw.block);
                                 if let Ok(block) = pro_block {
                                     let bhash: H256 = block.crypt_hash();
                                     if bhash == *hash {
@@ -1118,7 +1118,7 @@ impl Bft {
             self.pub_sender
                 .send((
                     routing_key!(Consensus >> VerifyBlockReq).into(),
-                    msg.clone().try_into().unwrap(),
+                    msg.try_into().unwrap(),
                 ))
                 .unwrap();
             self.unverified_msg
@@ -1332,7 +1332,7 @@ impl Bft {
                     // Taking all transactions to avoid that.
                     // Next turn when proposing a new proposal in the same height, this node will use
                     // an empty block.
-                    block.set_body(blocktxs.take_body().clone());
+                    block.set_body(blocktxs.take_body());
                     break;
                 }
             }

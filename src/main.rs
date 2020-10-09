@@ -195,7 +195,7 @@ fn main() {
     });
 
     // NTP service
-    let ntp_config = config.ntp_config.clone();
+    let ntp_config = config.ntp_config;
     // Default
     // let ntp_config = Ntp {
     //     enabled: true,

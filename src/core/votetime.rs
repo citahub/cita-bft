@@ -94,8 +94,7 @@ impl WaitTimer {
 
             // put the timeval into a timerheap
             // put the TimeoutInfo into a hashmap, K: timeval  V: TimeoutInfo
-            if set_time.is_ok() {
-                let time_out = set_time.unwrap();
+            if let Ok(time_out) = set_time {
                 timer_heap.push(time_out);
             }
 
